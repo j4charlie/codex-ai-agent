@@ -626,6 +626,7 @@ class CodexAgentView extends ItemView {
     this.runningProcess = child;
     this.runButton?.setText("Stop");
     this.setLiveStatus("thinking", "正在思考");
+    this.clearComposer();
 
     child.stdin.write(this.composeCodexPrompt(payload));
     child.stdin.end();
@@ -686,6 +687,14 @@ class CodexAgentView extends ItemView {
     const clone = this.promptInput.cloneNode(true) as HTMLElement;
     clone.querySelectorAll(".codex-agent-chip").forEach((node) => node.remove());
     return clone.innerText.trim();
+  }
+
+  private clearComposer() {
+    this.contextChips = [];
+    if (this.promptInput) {
+      this.promptInput.empty();
+      this.updatePromptEmptyState();
+    }
   }
 
   private async buildCodexPayload(prompt: string) {
