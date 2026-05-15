@@ -1,0 +1,23 @@
+{
+  "name": "codex-for-obsidian",
+  "version": "0.1.0",
+  "description": "A local Codex CLI powered agent plugin for Obsidian.",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -noEmit -skipLibCheck",
+    "typecheck": "tsc -noEmit -skipLibCheck"
+  },
+  "keywords": [
+    "obsidian",
+    "codex",
+    "agent",
+    "plugin"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "obsidian": "^1.5.12",
+    "typescript": "^5.4.0"
+  }
+}
+

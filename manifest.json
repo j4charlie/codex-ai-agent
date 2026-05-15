@@ -1,0 +1,11 @@
+{
+  "id": "codex-for-obsidian",
+  "name": "Codex for Obsidian",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Run a local Codex CLI powered agent inside Obsidian.",
+  "author": "",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}
+

@@ -1,0 +1,7 @@
+.codex-agent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
