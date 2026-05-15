@@ -396,7 +396,7 @@
 }
 
 .codex-agent-event.is-status .codex-agent-event-marker {
-  margin-top: 8px;
+  margin-top: 9px;
 }
 
 .codex-agent-event.is-response .codex-agent-event-marker {
@@ -463,6 +463,7 @@
   margin: 0;
   color: var(--codex-muted);
   font-size: 13px;
+  line-height: 17px;
   font-weight: 700;
 }
 
