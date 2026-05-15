@@ -35,7 +35,7 @@ interface ContextChip {
 interface TimelineItem {
   title: string;
   body: string;
-  tone: "user" | "thinking" | "tool" | "command" | "response" | "usage" | "done";
+  tone: "status" | "command" | "response";
 }
 
 export default class CodexForObsidianPlugin extends Plugin {
@@ -221,6 +221,8 @@ class CodexAgentView extends ItemView {
   private runningProcess: any = null;
   private liveStatusEl: HTMLElement | null = null;
   private liveStatusTextEl: HTMLElement | null = null;
+  private runStartedAt = 0;
+  private statusItemIndex: number | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -582,21 +584,13 @@ class CodexAgentView extends ItemView {
 
     this.timeline = [
       {
-        title: "You",
-        body: target,
-        tone: "user"
-      },
-      {
-        title: "Context",
-        body: attached > 0 ? summary : "No attached context.",
-        tone: "tool"
-      },
-      {
-        title: "Codex",
-        body: `${this.mode === "ask" ? "Read-only ask" : "Read-only agent compatibility test"} · ${this.modelChoice} · ${this.reasoningLevel} · ${this.speedChoice}\n正在思考...`,
-        tone: "thinking"
+        title: "正在思考",
+        body: attached > 0 ? `已读取 ${attached} 个上下文：${summary}` : "未添加上下文",
+        tone: "status"
       }
     ];
+    this.statusItemIndex = 0;
+    this.runStartedAt = Date.now();
 
     this.renderTimelineItems();
 
@@ -675,6 +669,8 @@ class CodexAgentView extends ItemView {
           body: `Codex exited with code ${code ?? "unknown"}.`,
           tone: "command"
         });
+      } else {
+        this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
       }
     });
   }
@@ -791,11 +787,7 @@ class CodexAgentView extends ItemView {
         return;
       }
 
-      this.appendTimelineItem({
-        title: stream === "stderr" ? "Diagnostic" : "Log",
-        body: trimmed.length > 500 ? `${trimmed.slice(0, 500)}...` : trimmed,
-        tone: "command"
-      });
+      this.updateTranscriptStatus("正在运行", trimmed.length > 160 ? `${trimmed.slice(0, 160)}...` : trimmed);
       return;
     }
 
@@ -817,11 +809,13 @@ class CodexAgentView extends ItemView {
   private mapCodexEvent(event: any): TimelineItem | null {
     if (event.type === "thread.started") {
       this.setLiveStatus("thinking", "正在思考");
+      this.updateTranscriptStatus("正在思考");
       return null;
     }
 
     if (event.type === "turn.started") {
       this.setLiveStatus("thinking", "正在思考");
+      this.updateTranscriptStatus("正在思考");
       return null;
     }
 
@@ -829,35 +823,27 @@ class CodexAgentView extends ItemView {
       const item = event.item ?? {};
       if (item.type === "agent_message") {
         this.setLiveStatus("thinking", "正在整理回复");
+        this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
         return {
-          title: "Codex response",
+          title: "Codex",
           body: item.text ?? "",
           tone: "response"
         };
       }
       this.setLiveStatus(item.type?.includes("command") ? "running" : "thinking", item.type?.includes("command") ? "正在运行" : "正在处理");
-      return {
-        title: item.type?.includes("command") ? "Command" : "Tool",
-        body: this.describeCodexItem(item),
-        tone: item.type?.includes("command") ? "command" : "tool"
-      };
+      this.updateTranscriptStatus(item.type?.includes("command") ? "正在运行" : "正在处理", this.describeCodexItem(item));
+      return null;
     }
 
     if (event.type === "turn.completed") {
       this.setLiveStatus("done", "已完成");
       const usage = event.usage;
-      return {
-        title: "Usage",
-        body: usage ? `input ${usage.input_tokens} · cached ${usage.cached_input_tokens} · output ${usage.output_tokens} · reasoning ${usage.reasoning_output_tokens}` : "Turn completed.",
-        tone: "usage"
-      };
+      this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, usage ? `input ${usage.input_tokens} · cached ${usage.cached_input_tokens} · output ${usage.output_tokens} · reasoning ${usage.reasoning_output_tokens}` : "");
+      return null;
     }
 
-    return {
-      title: event.type ?? "Codex event",
-      body: JSON.stringify(event).slice(0, 700),
-      tone: "tool"
-    };
+    this.updateTranscriptStatus("正在处理", JSON.stringify(event).slice(0, 160));
+    return null;
   }
 
   private shouldIgnoreCodexLog(line: string) {
@@ -892,6 +878,31 @@ class CodexAgentView extends ItemView {
   private appendTimelineItem(item: TimelineItem) {
     this.timeline = [...this.timeline, item];
     this.renderTimelineItems();
+  }
+
+  private updateTranscriptStatus(title: string, body = "") {
+    const item: TimelineItem = { title, body, tone: "status" };
+    if (this.statusItemIndex === null || !this.timeline[this.statusItemIndex]) {
+      this.timeline = [...this.timeline, item];
+      this.statusItemIndex = this.timeline.length - 1;
+    } else {
+      this.timeline[this.statusItemIndex] = item;
+    }
+    this.renderTimelineItems();
+  }
+
+  private getElapsedLabel() {
+    if (!this.runStartedAt) {
+      return "0s";
+    }
+
+    const totalSeconds = Math.max(0, Math.round((Date.now() - this.runStartedAt) / 1000));
+    if (totalSeconds < 60) {
+      return `${totalSeconds}s`;
+    }
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}m ${seconds}s`;
   }
 
   private toCodexModel(model: ModelChoice) {
