@@ -192,6 +192,7 @@ class CodexAgentView extends ItemView {
     ];
     this.promptInput = null;
     this.timelineContainer = null;
+    this.workbenchContainer = null;
     this.modeButton = null;
     this.modelButton = null;
     this.speedButton = null;
@@ -230,6 +231,7 @@ class CodexAgentView extends ItemView {
 
   renderTimeline(container) {
     const section = container.createDiv("codex-agent-section codex-agent-workbench");
+    this.workbenchContainer = section;
     const head = section.createDiv("codex-agent-section-head");
     head.createEl("h3", { text: "Run" });
     head.createSpan({ cls: "codex-agent-muted", text: "Demo transcript" });
@@ -249,6 +251,10 @@ class CodexAgentView extends ItemView {
       const content = row.createDiv("codex-agent-event-content");
       content.createEl("h4", { text: item.title });
       content.createEl("p", { text: item.body });
+    });
+    this.timelineContainer.scrollTo({
+      top: this.timelineContainer.scrollHeight,
+      behavior: "smooth"
     });
   }
 

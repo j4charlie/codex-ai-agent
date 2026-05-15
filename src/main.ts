@@ -213,6 +213,7 @@ class CodexAgentView extends ItemView {
   ];
   private promptInput: HTMLElement | null = null;
   private timelineContainer: HTMLElement | null = null;
+  private workbenchContainer: HTMLElement | null = null;
   private modeButton: HTMLButtonElement | null = null;
   private modelButton: HTMLButtonElement | null = null;
   private speedButton: HTMLButtonElement | null = null;
@@ -254,6 +255,7 @@ class CodexAgentView extends ItemView {
 
   private renderTimeline(container: Element) {
     const section = container.createDiv("codex-agent-section codex-agent-workbench");
+    this.workbenchContainer = section;
     const head = section.createDiv("codex-agent-section-head");
     head.createEl("h3", { text: "Run" });
     head.createSpan({ cls: "codex-agent-muted", text: "Demo transcript" });
@@ -273,6 +275,10 @@ class CodexAgentView extends ItemView {
       const content = row.createDiv("codex-agent-event-content");
       content.createEl("h4", { text: item.title });
       content.createEl("p", { text: item.body });
+    });
+    this.timelineContainer.scrollTo({
+      top: this.timelineContainer.scrollHeight,
+      behavior: "smooth"
     });
   }
 
