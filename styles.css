@@ -1,4 +1,9 @@
+.workspace-leaf-content[data-type="codex-agent-view"] {
+  position: relative;
+}
+
 .workspace-leaf-content[data-type="codex-agent-view"] .view-content {
+  position: relative;
   height: 100%;
   overflow: hidden;
 }
@@ -112,6 +117,113 @@
   width: 34px;
   padding: 0;
   font-size: 22px;
+}
+
+.codex-agent-history-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-height: 36px;
+  margin-left: auto;
+  border: 0;
+  color: var(--codex-muted);
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.codex-agent-history-button:hover {
+  color: var(--codex-text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.codex-agent-history-panel {
+  position: absolute;
+  z-index: 20;
+  top: 42px;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 86%);
+  padding: 12px;
+  border-left: 1px solid var(--codex-line);
+  background: #15171c;
+  box-shadow: -18px 0 38px rgba(0, 0, 0, 0.32);
+  overflow-y: auto;
+}
+
+.codex-agent-history-search {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--codex-line);
+  border-radius: 8px;
+  color: var(--codex-text);
+  background: rgba(255, 255, 255, 0.04);
+  font: inherit;
+  outline: none;
+}
+
+.codex-agent-history-new {
+  width: 100%;
+  min-height: 38px;
+  margin-top: 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--codex-ink);
+  background: #8bb7ff;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.codex-agent-history-list {
+  margin-top: 14px;
+}
+
+.codex-agent-history-group {
+  margin: 18px 4px 8px;
+  color: var(--codex-muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.codex-agent-history-empty {
+  margin: 4px;
+  color: rgba(238, 241, 244, 0.32);
+  font-size: 12px;
+}
+
+.codex-agent-history-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--codex-muted);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.codex-agent-history-item:hover {
+  color: var(--codex-text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.codex-agent-history-icon {
+  color: var(--codex-muted);
+  font-size: 13px;
+}
+
+.codex-agent-history-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .codex-agent-section-head {
@@ -498,6 +610,18 @@
   background: var(--codex-green);
   font-weight: 800;
   cursor: pointer;
+}
+
+.codex-agent-submit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .codex-agent-selection-popover {

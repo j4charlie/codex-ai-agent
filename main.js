@@ -189,6 +189,7 @@ class CodexAgentView extends ItemView {
     this.runningSessionId = null;
     this.promptInput = null;
     this.tabContainer = null;
+    this.historyPanel = null;
     this.timelineContainer = null;
     this.workbenchContainer = null;
     this.modeButton = null;
@@ -264,6 +265,72 @@ class CodexAgentView extends ItemView {
 
     const add = this.tabContainer.createEl("button", { cls: "codex-agent-tab-add", text: "+" });
     add.addEventListener("click", () => this.addSession());
+
+    const history = this.tabContainer.createEl("button", {
+      cls: "codex-agent-history-button",
+      attr: { "aria-label": "History" }
+    });
+    history.createSpan({ text: "◷" });
+    history.addEventListener("click", () => this.toggleHistoryPanel());
+  }
+
+  toggleHistoryPanel() {
+    if (this.historyPanel) {
+      this.historyPanel.remove();
+      this.historyPanel = null;
+      return;
+    }
+
+    this.historyPanel = this.containerEl.createDiv("codex-agent-history-panel");
+    const search = this.historyPanel.createEl("input", {
+      cls: "codex-agent-history-search",
+      attr: {
+        placeholder: "Search Agents..."
+      }
+    });
+
+    const newButton = this.historyPanel.createEl("button", {
+      cls: "codex-agent-history-new",
+      text: "New Agent"
+    });
+    newButton.addEventListener("click", () => {
+      this.addSession();
+      this.toggleHistoryPanel();
+    });
+
+    const list = this.historyPanel.createDiv("codex-agent-history-list");
+    const renderList = () => {
+      const query = search.value.trim().toLowerCase();
+      list.empty();
+      const sessions = this.sessions.filter((session) => session.title.toLowerCase().includes(query));
+      this.renderHistoryGroup(list, "Today", sessions);
+      this.renderHistoryGroup(list, "Yesterday", []);
+      this.renderHistoryGroup(list, "Last 7 Days", []);
+      this.renderHistoryGroup(list, "Last 30 Days", []);
+    };
+    search.addEventListener("input", renderList);
+    renderList();
+    search.focus();
+  }
+
+  renderHistoryGroup(parent, label, sessions) {
+    parent.createDiv({ cls: "codex-agent-history-group", text: label });
+    if (sessions.length === 0) {
+      parent.createDiv({ cls: "codex-agent-history-empty", text: "No agents" });
+      return;
+    }
+
+    sessions.forEach((session) => {
+      const item = parent.createEl("button", { cls: "codex-agent-history-item" });
+      item.createSpan({ cls: "codex-agent-history-icon", text: session.timeline.length > 0 ? "✓" : "✎" });
+      item.createSpan({ cls: "codex-agent-history-title", text: session.title });
+      item.addEventListener("click", () => {
+        this.activeSessionId = session.id;
+        this.renderSessionTabs();
+        this.renderTimelineItems();
+        this.toggleHistoryPanel();
+      });
+    });
   }
 
   renderTimeline(container) {
@@ -326,7 +393,8 @@ class CodexAgentView extends ItemView {
     this.speedButton = controls.createEl("button", { cls: "codex-agent-select-button", text: `${this.reasoningLevel} · ${this.speedChoice}` });
     this.speedButton.addEventListener("click", (event) => this.openReasoningMenu(event));
 
-    this.runButton = footer.createEl("button", { cls: "mod-cta", text: "Run Codex" });
+    this.runButton = footer.createEl("button", { cls: "mod-cta codex-agent-submit-button", attr: { "aria-label": "Submit" } });
+    this.runButton.setText("↑");
     this.runButton.addEventListener("click", () => this.runCodex());
   }
 
@@ -572,7 +640,7 @@ class CodexAgentView extends ItemView {
     if (this.runningProcess) {
       this.runningProcess.kill();
       this.runningProcess = null;
-      this.runButton?.setText("Run Codex");
+      this.runButton?.setText("↑");
       this.stopElapsedTimer();
       this.appendTimelineItem({
         title: "Stopped",
@@ -637,7 +705,7 @@ class CodexAgentView extends ItemView {
     });
 
     this.runningProcess = child;
-    this.runButton?.setText("Stop");
+    this.runButton?.setText("■");
     this.setLiveStatus("thinking", "正在思考");
     this.clearComposer();
 
@@ -681,7 +749,7 @@ class CodexAgentView extends ItemView {
 
       this.runningProcess = null;
       this.runningSessionId = null;
-      this.runButton?.setText("Run Codex");
+      this.runButton?.setText("↑");
       this.stopElapsedTimer();
       this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "已完成" : "运行失败");
       if (code !== 0) {
@@ -983,7 +1051,7 @@ class CodexAgentView extends ItemView {
       this.runningProcess = null;
       this.runningSessionId = null;
       this.stopElapsedTimer();
-      this.runButton?.setText("Run Codex");
+      this.runButton?.setText("↑");
     }
 
     this.sessions = this.sessions.filter((session) => session.id !== sessionId);
