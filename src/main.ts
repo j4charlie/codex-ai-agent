@@ -204,13 +204,7 @@ class CodexAgentView extends ItemView {
   private reasoningLevel: ReasoningLevel = "中";
   private modelChoice: ModelChoice = "GPT-5.5";
   private speedChoice: SpeedChoice = "标准";
-  private timeline: TimelineItem[] = [
-    {
-      title: "Ready",
-      body: "Attach note context, describe the task, then run a local foreground agent session.",
-      tone: "done"
-    }
-  ];
+  private timeline: TimelineItem[] = [];
   private promptInput: HTMLElement | null = null;
   private timelineContainer: HTMLElement | null = null;
   private workbenchContainer: HTMLElement | null = null;
@@ -258,10 +252,9 @@ class CodexAgentView extends ItemView {
   }
 
   private renderTimeline(container: Element) {
-    const section = container.createDiv("codex-agent-section codex-agent-workbench");
+    const section = container.createDiv("codex-agent-workbench");
     this.workbenchContainer = section;
-    const head = section.createDiv("codex-agent-section-head");
-    head.createEl("h3", { text: "Run" });
+    const head = section.createDiv("codex-agent-section-head codex-agent-run-head");
     this.liveStatusEl = head.createDiv("codex-agent-live-status is-idle");
     this.liveStatusEl.createSpan("codex-agent-live-dot");
     this.liveStatusTextEl = this.liveStatusEl.createSpan({ text: "Idle" });

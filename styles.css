@@ -206,6 +206,15 @@
   overflow: hidden;
 }
 
+.codex-agent-run-head {
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.codex-agent-live-status.is-idle {
+  display: none;
+}
+
 .codex-agent-timeline {
   display: flex;
   flex-direction: column;
