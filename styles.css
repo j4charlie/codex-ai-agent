@@ -390,9 +390,17 @@
 .codex-agent-event-marker {
   width: 9px;
   height: 9px;
-  margin-top: 6px;
+  margin-top: 12px;
   border-radius: 50%;
   background: var(--codex-muted);
+}
+
+.codex-agent-event.is-status .codex-agent-event-marker {
+  margin-top: 8px;
+}
+
+.codex-agent-event.is-response .codex-agent-event-marker {
+  margin-top: 14px;
 }
 
 .codex-agent-event.is-thinking .codex-agent-event-marker {
