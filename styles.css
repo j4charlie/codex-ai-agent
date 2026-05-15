@@ -105,6 +105,52 @@
   font-size: 12px;
 }
 
+.codex-agent-live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--codex-muted);
+  font-size: 12px;
+}
+
+.codex-agent-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--codex-muted);
+}
+
+.codex-agent-live-status.is-thinking .codex-agent-live-dot,
+.codex-agent-live-status.is-running .codex-agent-live-dot {
+  background: var(--codex-blue);
+  animation: codex-agent-pulse 1.1s ease-in-out infinite;
+}
+
+.codex-agent-live-status.is-running .codex-agent-live-dot {
+  background: var(--codex-amber);
+}
+
+.codex-agent-live-status.is-done .codex-agent-live-dot {
+  background: var(--codex-green);
+}
+
+.codex-agent-live-status.is-error .codex-agent-live-dot {
+  background: var(--codex-red);
+}
+
+@keyframes codex-agent-pulse {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.55;
+  }
+
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
 .codex-agent-chip {
   display: inline-flex;
   align-items: center;

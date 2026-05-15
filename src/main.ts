@@ -219,6 +219,8 @@ class CodexAgentView extends ItemView {
   private speedButton: HTMLButtonElement | null = null;
   private runButton: HTMLButtonElement | null = null;
   private runningProcess: any = null;
+  private liveStatusEl: HTMLElement | null = null;
+  private liveStatusTextEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -258,9 +260,12 @@ class CodexAgentView extends ItemView {
     this.workbenchContainer = section;
     const head = section.createDiv("codex-agent-section-head");
     head.createEl("h3", { text: "Run" });
-    head.createSpan({ cls: "codex-agent-muted", text: "Demo transcript" });
+    this.liveStatusEl = head.createDiv("codex-agent-live-status is-idle");
+    this.liveStatusEl.createSpan("codex-agent-live-dot");
+    this.liveStatusTextEl = this.liveStatusEl.createSpan({ text: "Idle" });
     this.timelineContainer = section.createDiv("codex-agent-timeline");
     this.renderTimelineItems();
+    this.setLiveStatus("idle", "Idle");
   }
 
   private renderTimelineItems() {
@@ -603,6 +608,7 @@ class CodexAgentView extends ItemView {
 
     this.runningProcess = child;
     this.runButton?.setText("Stop");
+    this.setLiveStatus("thinking", "正在思考");
 
     child.stdin.write(this.composeCodexPrompt(payload));
     child.stdin.end();
@@ -618,6 +624,7 @@ class CodexAgentView extends ItemView {
     });
 
     child.stderr.on("data", (chunk: any) => {
+      this.setLiveStatus("running", "正在运行");
       stderrBuffer += chunk.toString();
       const lines = stderrBuffer.split(/\r?\n/);
       stderrBuffer = lines.pop() ?? "";
@@ -625,6 +632,7 @@ class CodexAgentView extends ItemView {
     });
 
     child.on("error", (error: Error) => {
+      this.setLiveStatus("error", "启动失败");
       this.appendTimelineItem({
         title: "Codex failed to start",
         body: `${error.message}. Tried: ${codexBin}`,
@@ -642,6 +650,7 @@ class CodexAgentView extends ItemView {
 
       this.runningProcess = null;
       this.runButton?.setText("Run Codex");
+      this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "已完成" : "运行失败");
       this.appendTimelineItem({
         title: "Codex exited",
         body: `Process exited with code ${code ?? "unknown"}.`,
@@ -772,6 +781,7 @@ class CodexAgentView extends ItemView {
 
   private mapCodexEvent(event: any): TimelineItem {
     if (event.type === "thread.started") {
+      this.setLiveStatus("thinking", "正在思考");
       return {
         title: "Thread started",
         body: event.thread_id ?? "New Codex thread started.",
@@ -780,6 +790,7 @@ class CodexAgentView extends ItemView {
     }
 
     if (event.type === "turn.started") {
+      this.setLiveStatus("thinking", "正在思考");
       return {
         title: "Turn started",
         body: "Codex started processing the request.",
@@ -790,12 +801,14 @@ class CodexAgentView extends ItemView {
     if (event.type === "item.completed") {
       const item = event.item ?? {};
       if (item.type === "agent_message") {
+        this.setLiveStatus("thinking", "正在整理回复");
         return {
           title: "Codex response",
           body: item.text ?? "",
           tone: "done"
         };
       }
+      this.setLiveStatus(item.type?.includes("command") ? "running" : "thinking", item.type?.includes("command") ? "正在运行" : "正在处理");
       return {
         title: `Codex item: ${item.type ?? "unknown"}`,
         body: JSON.stringify(item).slice(0, 700),
@@ -804,6 +817,7 @@ class CodexAgentView extends ItemView {
     }
 
     if (event.type === "turn.completed") {
+      this.setLiveStatus("done", "已完成");
       const usage = event.usage;
       return {
         title: "Turn completed",
@@ -817,6 +831,16 @@ class CodexAgentView extends ItemView {
       body: JSON.stringify(event).slice(0, 700),
       tone: "tool"
     };
+  }
+
+  private setLiveStatus(status: "idle" | "thinking" | "running" | "done" | "error", text: string) {
+    if (!this.liveStatusEl || !this.liveStatusTextEl) {
+      return;
+    }
+
+    this.liveStatusEl.removeClasses(["is-idle", "is-thinking", "is-running", "is-done", "is-error"]);
+    this.liveStatusEl.addClass(`is-${status}`);
+    this.liveStatusTextEl.setText(text);
   }
 
   private appendTimelineItem(item: TimelineItem) {
