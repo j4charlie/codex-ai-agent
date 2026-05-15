@@ -345,6 +345,7 @@ class CodexAgentView extends ItemView {
     this.modelChoice = "GPT-5.5";
     this.speedChoice = "标准";
     this.sessions = [];
+    this.archivedSessions = [];
     this.activeSessionId = "";
     this.runningSessionId = null;
     this.promptInput = null;
@@ -464,11 +465,12 @@ class CodexAgentView extends ItemView {
     const renderList = () => {
       const query = search.value.trim().toLowerCase();
       list.empty();
-      const sessions = this.sessions.filter((session) => session.title.toLowerCase().includes(query));
-      this.renderHistoryGroup(list, "Today", sessions);
-      this.renderHistoryGroup(list, "Yesterday", []);
-      this.renderHistoryGroup(list, "Last 7 Days", []);
-      this.renderHistoryGroup(list, "Last 30 Days", []);
+      const sessions = this.getHistorySessions()
+        .filter((session) => session.title.toLowerCase().includes(query));
+      this.renderHistoryGroup(list, "Today", this.filterHistoryByAge(sessions, 0, 1));
+      this.renderHistoryGroup(list, "Yesterday", this.filterHistoryByAge(sessions, 1, 2));
+      this.renderHistoryGroup(list, "Last 7 Days", this.filterHistoryByAge(sessions, 2, 7));
+      this.renderHistoryGroup(list, "Last 30 Days", this.filterHistoryByAge(sessions, 7, 30));
     };
     search.addEventListener("input", renderList);
     renderList();
@@ -487,12 +489,43 @@ class CodexAgentView extends ItemView {
       item.createSpan({ cls: "codex-agent-history-icon", text: session.timeline.length > 0 ? "✓" : "✎" });
       item.createSpan({ cls: "codex-agent-history-title", text: session.title });
       item.addEventListener("click", () => {
-        this.activeSessionId = session.id;
+        this.restoreSession(session.id);
         this.renderSessionTabs();
         this.renderTimelineItems();
         this.toggleHistoryPanel();
       });
     });
+  }
+
+  getHistorySessions() {
+    const byId = new Map();
+    [...this.sessions, ...this.archivedSessions].forEach((session) => byId.set(session.id, session));
+    return [...byId.values()]
+      .sort((a, b) => this.getSessionHistoryTime(b) - this.getSessionHistoryTime(a));
+  }
+
+  filterHistoryByAge(sessions, minDays, maxDays) {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    return sessions.filter((session) => {
+      const ageDays = Math.floor((now - this.getSessionHistoryTime(session)) / day);
+      return ageDays >= minDays && ageDays < maxDays;
+    });
+  }
+
+  getSessionHistoryTime(session) {
+    return session.closedAt ?? session.updatedAt ?? session.createdAt;
+  }
+
+  restoreSession(sessionId) {
+    const archived = this.archivedSessions.find((session) => session.id === sessionId);
+    if (archived) {
+      archived.closedAt = undefined;
+      archived.updatedAt = Date.now();
+      this.archivedSessions = this.archivedSessions.filter((session) => session.id !== sessionId);
+      this.sessions = [...this.sessions, archived];
+    }
+    this.activeSessionId = sessionId;
   }
 
   renderTimeline(container) {
@@ -829,6 +862,7 @@ class CodexAgentView extends ItemView {
 
     const session = this.getActiveSession();
     session.title = this.makeSessionTitle(target);
+    session.updatedAt = Date.now();
     session.timeline = [
       {
         title: "正在思考",
@@ -1075,6 +1109,7 @@ class CodexAgentView extends ItemView {
   appendTimelineItem(item) {
     const session = this.getTargetSession();
     session.timeline = [...session.timeline, item];
+    session.updatedAt = Date.now();
     if (session.id === this.activeSessionId) {
       this.renderTimelineItems();
     }
@@ -1089,6 +1124,7 @@ class CodexAgentView extends ItemView {
     } else {
       session.timeline[session.statusItemIndex] = item;
     }
+    session.updatedAt = Date.now();
     if (session.id === this.activeSessionId) {
       this.renderTimelineItems();
     }
@@ -1146,12 +1182,15 @@ class CodexAgentView extends ItemView {
   }
 
   createSession(title = "New Agent") {
+    const now = Date.now();
     return {
-      id: `session-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      id: `session-${now}-${Math.random().toString(16).slice(2)}`,
       title,
       timeline: [],
       statusItemIndex: null,
-      runStartedAt: 0
+      runStartedAt: 0,
+      createdAt: now,
+      updatedAt: now
     };
   }
 
@@ -1164,6 +1203,7 @@ class CodexAgentView extends ItemView {
   }
 
   closeSession(sessionId) {
+    const closingSession = this.sessions.find((session) => session.id === sessionId);
     if (this.runningSessionId === sessionId && this.runningProcess) {
       this.isCancellingRun = true;
       this.runningProcess.cancel();
@@ -1171,6 +1211,16 @@ class CodexAgentView extends ItemView {
       this.runningSessionId = null;
       this.stopElapsedTimer();
       this.runButton?.setText("↑");
+    }
+
+    if (closingSession) {
+      const now = Date.now();
+      closingSession.closedAt = now;
+      closingSession.updatedAt = now;
+      this.archivedSessions = [
+        closingSession,
+        ...this.archivedSessions.filter((session) => session.id !== sessionId)
+      ];
     }
 
     this.sessions = this.sessions.filter((session) => session.id !== sessionId);
