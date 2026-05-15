@@ -20,6 +20,8 @@ interface ContextChip {
   label: string;
   detail: string;
   kind: "selection" | "file" | "folder";
+  path?: string;
+  text?: string;
 }
 
 interface TimelineItem {
@@ -316,7 +318,8 @@ class CodexAgentView extends ItemView {
       id: `file:${file.path}`,
       label: file.name,
       detail: file.path,
-      kind: "file"
+      kind: "file",
+      path: file.path
     });
     new Notice(`已添加文件到对话：${file.name}`);
   }
@@ -326,7 +329,8 @@ class CodexAgentView extends ItemView {
       id: `folder:${folder.path}`,
       label: folder.name || folder.path,
       detail: folder.path,
-      kind: "folder"
+      kind: "folder",
+      path: folder.path
     });
     new Notice(`已添加路径到对话：${folder.path}`);
   }
@@ -340,7 +344,9 @@ class CodexAgentView extends ItemView {
       id: `selection:${file?.path ?? "untitled"}:${Date.now()}`,
       label: "Selected text",
       detail: `${selection.length} characters from ${file?.basename ?? "active editor"}`,
-      kind: "selection"
+      kind: "selection",
+      path: file?.path,
+      text: selection
     });
     new Notice("已添加选中文本到对话");
   }
@@ -381,7 +387,7 @@ class CodexAgentView extends ItemView {
     this.insertChipElement(chip);
   }
 
-  private insertChipElement(chip: Pick<ContextChip, "id" | "kind" | "label">) {
+  private insertChipElement(chip: Pick<ContextChip, "id" | "kind" | "label" | "path">) {
     if (!this.promptInput) {
       return;
     }
@@ -391,6 +397,9 @@ class CodexAgentView extends ItemView {
     chipEl.setAttr("contenteditable", "false");
     chipEl.setAttr("data-context-id", chip.id);
     chipEl.setAttr("data-context-kind", chip.kind);
+    if (chip.path) {
+      chipEl.setAttr("data-context-path", chip.path);
+    }
     chipEl.createSpan({
       cls: `codex-agent-chip-icon is-${chip.kind}`,
       text: chip.kind === "folder" ? "▣" : chip.kind === "file" ? "◉" : "∞"
@@ -466,7 +475,16 @@ class CodexAgentView extends ItemView {
   private runDemo() {
     const prompt = this.promptInput?.innerText.trim();
     const target = prompt || "整理当前笔记，并给出可审查的修改建议";
-    const attached = this.contextChips.length || 1;
+    const payload = this.buildDemoPayload(target);
+    const attached = payload.context.length;
+    const summary = payload.context.length > 0
+      ? payload.context.map((item) => {
+        if (item.kind === "selection") {
+          return `selection from ${item.path ?? "active editor"} (${item.text?.length ?? 0} chars)`;
+        }
+        return `${item.kind}: ${item.path}`;
+      }).join("; ")
+      : "no attached context";
 
     this.timeline = [
       {
@@ -476,7 +494,7 @@ class CodexAgentView extends ItemView {
       },
       {
         title: "Read context",
-        body: `Loaded ${attached} context item${attached > 1 ? "s" : ""}: active note, selection, or explicit vault files.`,
+        body: `Prepared ${attached} structured context item${attached === 1 ? "" : "s"}: ${summary}.`,
         tone: "tool"
       },
       {
@@ -497,5 +515,18 @@ class CodexAgentView extends ItemView {
     ];
 
     this.renderTimelineItems();
+  }
+
+  private buildDemoPayload(prompt: string) {
+    return {
+      prompt,
+      context: this.contextChips.map((chip) => ({
+        id: chip.id,
+        kind: chip.kind,
+        label: chip.label,
+        path: chip.path,
+        text: chip.kind === "selection" ? chip.text : undefined
+      }))
+    };
   }
 }
