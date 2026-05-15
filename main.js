@@ -1,6 +1,7 @@
 const {
   ItemView,
   MarkdownView,
+  MarkdownRenderer,
   Menu,
   Notice,
   Plugin,
@@ -196,6 +197,7 @@ class CodexAgentView extends ItemView {
     this.liveStatusTextEl = null;
     this.runStartedAt = 0;
     this.statusItemIndex = null;
+    this.elapsedTimer = null;
   }
 
   getViewType() {
@@ -204,6 +206,14 @@ class CodexAgentView extends ItemView {
 
   getDisplayText() {
     return "Codex Agent";
+  }
+
+  async onClose() {
+    this.stopElapsedTimer();
+    if (this.runningProcess) {
+      this.runningProcess.kill();
+      this.runningProcess = null;
+    }
   }
 
   async onOpen() {
@@ -230,13 +240,8 @@ class CodexAgentView extends ItemView {
   renderTimeline(container) {
     const section = container.createDiv("codex-agent-workbench");
     this.workbenchContainer = section;
-    const head = section.createDiv("codex-agent-section-head codex-agent-run-head");
-    this.liveStatusEl = head.createDiv("codex-agent-live-status is-idle");
-    this.liveStatusEl.createSpan("codex-agent-live-dot");
-    this.liveStatusTextEl = this.liveStatusEl.createSpan({ text: "Idle" });
     this.timelineContainer = section.createDiv("codex-agent-timeline");
     this.renderTimelineItems();
-    this.setLiveStatus("idle", "Idle");
   }
 
   renderTimelineItems() {
@@ -249,8 +254,13 @@ class CodexAgentView extends ItemView {
       const row = this.timelineContainer.createDiv(`codex-agent-event is-${item.tone}`);
       row.createDiv("codex-agent-event-marker");
       const content = row.createDiv("codex-agent-event-content");
-      content.createEl("h4", { text: item.title });
-      content.createEl("p", { text: item.body });
+      if (item.tone === "response") {
+        const markdown = content.createDiv("codex-agent-markdown");
+        MarkdownRenderer.renderMarkdown(item.body, markdown, "", this);
+      } else {
+        content.createEl("h4", { text: item.title });
+        content.createEl("p", { text: item.body });
+      }
     });
     this.timelineContainer.scrollTo({
       top: this.timelineContainer.scrollHeight,
@@ -533,6 +543,7 @@ class CodexAgentView extends ItemView {
       this.runningProcess.kill();
       this.runningProcess = null;
       this.runButton?.setText("Run Codex");
+      this.stopElapsedTimer();
       this.appendTimelineItem({
         title: "Stopped",
         body: "Codex process was stopped by the user.",
@@ -563,6 +574,7 @@ class CodexAgentView extends ItemView {
     ];
     this.statusItemIndex = 0;
     this.runStartedAt = Date.now();
+    this.startElapsedTimer();
 
     this.renderTimelineItems();
 
@@ -634,6 +646,7 @@ class CodexAgentView extends ItemView {
 
       this.runningProcess = null;
       this.runButton?.setText("Run Codex");
+      this.stopElapsedTimer();
       this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "已完成" : "运行失败");
       if (code !== 0) {
         this.appendTimelineItem({
@@ -759,7 +772,7 @@ class CodexAgentView extends ItemView {
         return;
       }
 
-      this.updateTranscriptStatus("正在运行", trimmed.length > 160 ? `${trimmed.slice(0, 160)}...` : trimmed);
+      this.updateTranscriptStatus(`正在运行 ${this.getElapsedLabel()}`, trimmed.length > 160 ? `${trimmed.slice(0, 160)}...` : trimmed);
       return;
     }
 
@@ -797,13 +810,13 @@ class CodexAgentView extends ItemView {
         this.setLiveStatus("thinking", "正在整理回复");
         this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
         return {
-          title: "Codex",
+          title: "",
           body: item.text ?? "",
           tone: "response"
         };
       }
       this.setLiveStatus(item.type?.includes("command") ? "running" : "thinking", item.type?.includes("command") ? "正在运行" : "正在处理");
-      this.updateTranscriptStatus(item.type?.includes("command") ? "正在运行" : "正在处理", this.describeCodexItem(item));
+      this.updateTranscriptStatus(item.type?.includes("command") ? `正在运行 ${this.getElapsedLabel()}` : `正在处理 ${this.getElapsedLabel()}`, this.describeCodexItem(item));
       return null;
     }
 
@@ -865,6 +878,22 @@ class CodexAgentView extends ItemView {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     return `${minutes}m ${seconds}s`;
+  }
+
+  startElapsedTimer() {
+    this.stopElapsedTimer();
+    this.elapsedTimer = window.setInterval(() => {
+      if (this.runningProcess) {
+        this.updateTranscriptStatus(`正在思考 ${this.getElapsedLabel()}`);
+      }
+    }, 1000);
+  }
+
+  stopElapsedTimer() {
+    if (this.elapsedTimer !== null) {
+      window.clearInterval(this.elapsedTimer);
+      this.elapsedTimer = null;
+    }
   }
 
   setLiveStatus(status, text) {

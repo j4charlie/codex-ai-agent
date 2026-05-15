@@ -209,6 +209,7 @@
 .codex-agent-run-head {
   justify-content: flex-end;
   margin-bottom: 6px;
+  display: none;
 }
 
 .codex-agent-live-status.is-idle {
@@ -285,7 +286,7 @@
 }
 
 .codex-agent-event.is-response .codex-agent-event-content {
-  padding: 2px 0 10px;
+  padding: 8px 0 18px;
   border: 0;
   background: transparent;
 }
@@ -306,7 +307,7 @@
 }
 
 .codex-agent-event.is-response .codex-agent-event-content h4 {
-  color: var(--codex-green);
+  display: none;
 }
 
 .codex-agent-event.is-status .codex-agent-event-content h4 {
@@ -332,6 +333,42 @@
   color: var(--codex-text);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.codex-agent-markdown {
+  color: var(--codex-text);
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.codex-agent-markdown > :first-child {
+  margin-top: 0;
+}
+
+.codex-agent-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.codex-agent-markdown p,
+.codex-agent-markdown ul,
+.codex-agent-markdown ol,
+.codex-agent-markdown pre,
+.codex-agent-markdown blockquote {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.codex-agent-markdown code {
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.codex-agent-markdown pre {
+  padding: 10px;
+  border: 1px solid var(--codex-line);
+  border-radius: 7px;
+  background: rgba(7, 8, 11, 0.5);
+  overflow-x: auto;
 }
 
 .codex-agent-event.is-status .codex-agent-event-content p {
