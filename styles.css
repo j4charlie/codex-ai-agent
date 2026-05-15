@@ -1,7 +1,330 @@
 .codex-agent-panel {
+  --codex-bg: #111318;
+  --codex-panel: #181b22;
+  --codex-panel-2: #20242d;
+  --codex-line: rgba(220, 226, 235, 0.12);
+  --codex-text: #eef1f4;
+  --codex-muted: #9ba4b3;
+  --codex-green: #79d59f;
+  --codex-amber: #e7bd6b;
+  --codex-red: #ea7a7a;
+  --codex-blue: #8bb7ff;
+  --codex-ink: #07080b;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 12px;
+  min-height: 100%;
+  padding: 14px;
+  color: var(--codex-text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 180px),
+    var(--codex-bg);
 }
 
+.codex-agent-panel * {
+  box-sizing: border-box;
+}
+
+.codex-agent-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 2px 4px;
+}
+
+.codex-agent-header h2 {
+  margin: 0;
+  color: var(--codex-text);
+  font-size: 22px;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.codex-agent-kicker {
+  margin: 0 0 4px;
+  color: var(--codex-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.codex-agent-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--codex-line);
+  border-radius: 999px;
+  color: var(--codex-green);
+  background: rgba(121, 213, 159, 0.08);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.codex-agent-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--codex-green);
+  box-shadow: 0 0 0 4px rgba(121, 213, 159, 0.12);
+}
+
+.codex-agent-section {
+  padding: 12px;
+  border: 1px solid var(--codex-line);
+  border-radius: 8px;
+  background: var(--codex-panel);
+}
+
+.codex-agent-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.codex-agent-section-head h3 {
+  margin: 0;
+  color: var(--codex-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.codex-agent-muted {
+  color: var(--codex-muted);
+  font-size: 12px;
+}
+
+.codex-agent-mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 8px;
+}
+
+.codex-agent-mode {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--codex-muted);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.codex-agent-mode.is-active {
+  border-color: rgba(139, 183, 255, 0.45);
+  color: var(--codex-text);
+  background: rgba(139, 183, 255, 0.12);
+}
+
+.codex-agent-mode-label {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.codex-agent-mode-caption {
+  color: var(--codex-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.codex-agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.codex-agent-actions button,
+.codex-agent-chip button {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--codex-line);
+  border-radius: 6px;
+  color: var(--codex-text);
+  background: var(--codex-panel-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.codex-agent-context-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.codex-agent-empty {
+  padding: 10px;
+  border: 1px dashed var(--codex-line);
+  border-radius: 7px;
+  color: var(--codex-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.codex-agent-chip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--codex-line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.codex-agent-chip-kind {
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: var(--codex-ink);
+  background: var(--codex-blue);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.codex-agent-chip-kind.is-selection {
+  background: var(--codex-amber);
+}
+
+.codex-agent-chip-kind.is-file {
+  background: var(--codex-green);
+}
+
+.codex-agent-chip-label,
+.codex-agent-chip-detail {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-agent-chip-label {
+  color: var(--codex-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.codex-agent-chip-detail {
+  color: var(--codex-muted);
+  font-size: 11px;
+}
+
+.codex-agent-workbench {
+  flex: 1 1 auto;
+  min-height: 240px;
+}
+
+.codex-agent-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.codex-agent-event {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.codex-agent-event-marker {
+  width: 9px;
+  height: 9px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--codex-muted);
+}
+
+.codex-agent-event.is-thinking .codex-agent-event-marker {
+  background: var(--codex-blue);
+}
+
+.codex-agent-event.is-tool .codex-agent-event-marker {
+  background: var(--codex-green);
+}
+
+.codex-agent-event.is-diff .codex-agent-event-marker {
+  background: var(--codex-amber);
+}
+
+.codex-agent-event.is-command .codex-agent-event-marker {
+  background: var(--codex-red);
+}
+
+.codex-agent-event-content {
+  padding: 9px 10px;
+  border: 1px solid var(--codex-line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.codex-agent-event-content h4 {
+  margin: 0 0 5px;
+  color: var(--codex-text);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.codex-agent-event-content p {
+  margin: 0;
+  color: var(--codex-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.codex-agent-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(139, 183, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(139, 183, 255, 0.08);
+}
+
+.codex-agent-composer textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--codex-line);
+  border-radius: 7px;
+  color: var(--codex-text);
+  background: rgba(7, 8, 11, 0.7);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.codex-agent-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--codex-muted);
+  font-size: 11px;
+}
+
+.codex-agent-composer-footer button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--codex-ink);
+  background: var(--codex-green);
+  font-weight: 800;
+  cursor: pointer;
+}

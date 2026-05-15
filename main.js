@@ -1,23 +1,8 @@
-import { ItemView, MarkdownView, Notice, Plugin, WorkspaceLeaf } from "obsidian";
+const { ItemView, MarkdownView, Notice, Plugin } = require("obsidian");
 
 const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 
-type AgentMode = "ask" | "agent";
-
-interface ContextChip {
-  id: string;
-  label: string;
-  detail: string;
-  kind: "note" | "selection" | "file";
-}
-
-interface TimelineItem {
-  title: string;
-  body: string;
-  tone: "thinking" | "tool" | "diff" | "command" | "done";
-}
-
-export default class CodexForObsidianPlugin extends Plugin {
+module.exports = class CodexForObsidianPlugin extends Plugin {
   async onload() {
     this.registerView(
       VIEW_TYPE_CODEX_AGENT,
@@ -33,22 +18,13 @@ export default class CodexForObsidianPlugin extends Plugin {
       name: "Open Codex Agent",
       callback: () => this.activateView()
     });
-
-    this.addCommand({
-      id: "attach-active-note-to-codex-agent",
-      name: "Attach active note to Codex Agent",
-      callback: async () => {
-        await this.activateView();
-        new Notice("Open the Codex Agent panel to attach the active note.");
-      }
-    });
   }
 
   async onunload() {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CODEX_AGENT);
   }
 
-  private async activateView() {
+  async activateView() {
     const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_CODEX_AGENT)[0];
 
     if (existing) {
@@ -68,32 +44,31 @@ export default class CodexForObsidianPlugin extends Plugin {
 
     this.app.workspace.revealLeaf(leaf);
   }
-}
+};
 
 class CodexAgentView extends ItemView {
-  private mode: AgentMode = "agent";
-  private contextChips: ContextChip[] = [];
-  private timeline: TimelineItem[] = [
-    {
-      title: "Ready",
-      body: "Attach note context, describe the task, then run a local foreground agent session.",
-      tone: "done"
-    }
-  ];
-  private promptInput: HTMLTextAreaElement | null = null;
-  private contextContainer: HTMLElement | null = null;
-  private timelineContainer: HTMLElement | null = null;
-  private modeButtons: Partial<Record<AgentMode, HTMLButtonElement>> = {};
-
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(leaf) {
     super(leaf);
+    this.mode = "agent";
+    this.contextChips = [];
+    this.timeline = [
+      {
+        title: "Ready",
+        body: "Attach note context, describe the task, then run a local foreground agent session.",
+        tone: "done"
+      }
+    ];
+    this.promptInput = null;
+    this.contextContainer = null;
+    this.timelineContainer = null;
+    this.modeButtons = {};
   }
 
-  getViewType(): string {
+  getViewType() {
     return VIEW_TYPE_CODEX_AGENT;
   }
 
-  getDisplayText(): string {
+  getDisplayText() {
     return "Codex Agent";
   }
 
@@ -109,7 +84,7 @@ class CodexAgentView extends ItemView {
     this.renderComposer(container);
   }
 
-  private renderHeader(container: Element) {
+  renderHeader(container) {
     const header = container.createDiv("codex-agent-header");
     const titleWrap = header.createDiv();
     titleWrap.createEl("p", { cls: "codex-agent-kicker", text: "LOCAL FOREGROUND AGENT" });
@@ -120,14 +95,14 @@ class CodexAgentView extends ItemView {
     status.createSpan({ text: "CLI ready" });
   }
 
-  private renderModeSwitch(container: Element) {
+  renderModeSwitch(container) {
     const section = container.createDiv("codex-agent-section codex-agent-mode-row");
     this.modeButtons.ask = this.createModeButton(section, "ask", "Ask", "Read-only planning and research");
     this.modeButtons.agent = this.createModeButton(section, "agent", "Agent", "Reviewable vault edits and commands");
     this.updateModeButtons();
   }
 
-  private createModeButton(parent: HTMLElement, mode: AgentMode, label: string, caption: string) {
+  createModeButton(parent, mode, label, caption) {
     const button = parent.createEl("button", { cls: "codex-agent-mode" });
     button.createSpan({ cls: "codex-agent-mode-label", text: label });
     button.createSpan({ cls: "codex-agent-mode-caption", text: caption });
@@ -138,13 +113,15 @@ class CodexAgentView extends ItemView {
     return button;
   }
 
-  private updateModeButtons() {
+  updateModeButtons() {
     Object.entries(this.modeButtons).forEach(([mode, button]) => {
-      button?.toggleClass("is-active", mode === this.mode);
+      if (button) {
+        button.toggleClass("is-active", mode === this.mode);
+      }
     });
   }
 
-  private renderContextBar(container: Element) {
+  renderContextBar(container) {
     const section = container.createDiv("codex-agent-section");
     const head = section.createDiv("codex-agent-section-head");
     head.createEl("h3", { text: "Context" });
@@ -156,6 +133,9 @@ class CodexAgentView extends ItemView {
     const selectionButton = actions.createEl("button", { text: "Selection" });
     selectionButton.addEventListener("click", () => this.attachSelection());
 
+    const sampleButton = actions.createEl("button", { text: "Sample" });
+    sampleButton.addEventListener("click", () => this.attachSample());
+
     const clearButton = actions.createEl("button", { text: "Clear" });
     clearButton.addEventListener("click", () => {
       this.contextChips = [];
@@ -166,7 +146,7 @@ class CodexAgentView extends ItemView {
     this.renderContextChips();
   }
 
-  private renderContextChips() {
+  renderContextChips() {
     if (!this.contextContainer) {
       return;
     }
@@ -182,7 +162,7 @@ class CodexAgentView extends ItemView {
     }
 
     this.contextChips.forEach((chip) => {
-      const chipEl = this.contextContainer!.createDiv("codex-agent-chip");
+      const chipEl = this.contextContainer.createDiv("codex-agent-chip");
       chipEl.createSpan({ cls: `codex-agent-chip-kind is-${chip.kind}`, text: chip.kind });
       const text = chipEl.createDiv();
       text.createSpan({ cls: "codex-agent-chip-label", text: chip.label });
@@ -195,7 +175,7 @@ class CodexAgentView extends ItemView {
     });
   }
 
-  private renderTimeline(container: Element) {
+  renderTimeline(container) {
     const section = container.createDiv("codex-agent-section codex-agent-workbench");
     const head = section.createDiv("codex-agent-section-head");
     head.createEl("h3", { text: "Run" });
@@ -204,14 +184,14 @@ class CodexAgentView extends ItemView {
     this.renderTimelineItems();
   }
 
-  private renderTimelineItems() {
+  renderTimelineItems() {
     if (!this.timelineContainer) {
       return;
     }
 
     this.timelineContainer.empty();
     this.timeline.forEach((item) => {
-      const row = this.timelineContainer!.createDiv(`codex-agent-event is-${item.tone}`);
+      const row = this.timelineContainer.createDiv(`codex-agent-event is-${item.tone}`);
       row.createDiv("codex-agent-event-marker");
       const content = row.createDiv("codex-agent-event-content");
       content.createEl("h4", { text: item.title });
@@ -219,7 +199,7 @@ class CodexAgentView extends ItemView {
     });
   }
 
-  private renderComposer(container: Element) {
+  renderComposer(container) {
     const composer = container.createDiv("codex-agent-composer");
     this.promptInput = composer.createEl("textarea", {
       attr: {
@@ -234,7 +214,7 @@ class CodexAgentView extends ItemView {
     runButton.addEventListener("click", () => this.runDemo());
   }
 
-  private attachActiveNote() {
+  attachActiveNote() {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active note to attach.");
@@ -249,7 +229,7 @@ class CodexAgentView extends ItemView {
     });
   }
 
-  private attachSelection() {
+  attachSelection() {
     const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
     const selection = markdownView?.editor.getSelection().trim();
 
@@ -267,7 +247,16 @@ class CodexAgentView extends ItemView {
     });
   }
 
-  private upsertContext(chip: ContextChip) {
+  attachSample() {
+    this.upsertContext({
+      id: "sample:first-phase-plan",
+      label: "First phase plan",
+      detail: "Demo context for Cursor-like Obsidian Agent",
+      kind: "file"
+    });
+  }
+
+  upsertContext(chip) {
     this.contextChips = [
       chip,
       ...this.contextChips.filter((item) => item.id !== chip.id)
@@ -275,7 +264,7 @@ class CodexAgentView extends ItemView {
     this.renderContextChips();
   }
 
-  private runDemo() {
+  runDemo() {
     const prompt = this.promptInput?.value.trim();
     const target = prompt || "整理当前笔记，并给出可审查的修改建议";
     const attached = this.contextChips.length || 1;
