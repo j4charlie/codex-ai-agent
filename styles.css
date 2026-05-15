@@ -140,86 +140,58 @@
   line-height: 1.35;
 }
 
-.codex-agent-actions {
+.codex-agent-context-inline {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
   gap: 6px;
-}
-
-.codex-agent-actions button,
-.codex-agent-chip button {
-  min-height: 26px;
-  padding: 4px 8px;
-  border: 1px solid var(--codex-line);
-  border-radius: 6px;
-  color: var(--codex-text);
-  background: var(--codex-panel-2);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.codex-agent-context-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.codex-agent-empty {
-  padding: 10px;
-  border: 1px dashed var(--codex-line);
-  border-radius: 7px;
-  color: var(--codex-muted);
-  font-size: 12px;
-  line-height: 1.45;
+  min-height: 24px;
 }
 
 .codex-agent-chip {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--codex-line);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.codex-agent-chip-kind {
+  gap: 5px;
+  max-width: 100%;
+  min-height: 23px;
   padding: 3px 6px;
-  border-radius: 999px;
-  color: var(--codex-ink);
-  background: var(--codex-blue);
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
+  border: 1px solid var(--codex-line);
+  border-radius: 5px;
+  color: var(--codex-text);
+  background: rgba(139, 183, 255, 0.12);
+  font-size: 12px;
 }
 
-.codex-agent-chip-kind.is-selection {
-  background: var(--codex-amber);
+.codex-agent-chip.is-selection-summary {
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.codex-agent-chip-kind.is-file {
-  background: var(--codex-green);
+.codex-agent-chip-icon {
+  color: var(--codex-blue);
+  font-size: 12px;
+  line-height: 1;
 }
 
-.codex-agent-chip-label,
-.codex-agent-chip-detail {
-  display: block;
+.codex-agent-chip-icon.is-folder {
+  color: var(--codex-green);
+}
+
+.codex-agent-chip-label {
+  color: var(--codex-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.codex-agent-chip-label {
-  color: var(--codex-text);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.codex-agent-chip-detail {
+.codex-agent-chip button {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
   color: var(--codex-muted);
-  font-size: 11px;
+  background: transparent;
+  line-height: 17px;
+  cursor: pointer;
 }
 
 .codex-agent-workbench {
@@ -317,7 +289,24 @@
   font-size: 11px;
 }
 
-.codex-agent-composer-footer button {
+.codex-agent-composer-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.codex-agent-pill-button {
+  min-height: 25px;
+  padding: 4px 9px;
+  border: 1px solid var(--codex-line);
+  border-radius: 999px;
+  color: var(--codex-text);
+  background: var(--codex-panel-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.codex-agent-composer-footer > .mod-cta {
   flex: 0 0 auto;
   min-height: 30px;
   padding: 6px 12px;
@@ -326,5 +315,20 @@
   color: var(--codex-ink);
   background: var(--codex-green);
   font-weight: 800;
+  cursor: pointer;
+}
+
+.codex-agent-selection-popover {
+  position: fixed;
+  z-index: 1000;
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid rgba(220, 226, 235, 0.18);
+  border-radius: 6px;
+  color: #eef1f4;
+  background: #181b22;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
 }

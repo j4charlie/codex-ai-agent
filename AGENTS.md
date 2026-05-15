@@ -22,6 +22,8 @@ Do not design the first phase as a full IDE replacement, remote background agent
 - Keep UI state separate from filesystem and process execution.
 - Favor deterministic parsing and structured event contracts where available.
 - Preserve user edits and avoid destructive file operations.
+- Do not modify Obsidian itself. All behavior must be added through documented plugin APIs and removed automatically when the plugin is disabled or deleted.
+- Add editor and file-tree actions through runtime menu events only. Do not persist custom buttons into Obsidian core configuration or patch native DOM components.
 
 ## Suggested Architecture
 
@@ -64,4 +66,3 @@ Do not implement yet:
 - Use conventional commits where practical, for example `feat: add agent panel scaffold`.
 - Do not commit generated dependency folders such as `node_modules` or build output.
 - Keep documentation in sync with product decisions.
-
