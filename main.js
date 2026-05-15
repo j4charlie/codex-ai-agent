@@ -308,16 +308,18 @@ class CodexAgentView extends ItemView {
 
   renderComposer(container) {
     const composer = container.createDiv("codex-agent-composer");
-    this.contextContainer = composer.createDiv("codex-agent-context-inline");
+    const inputBox = composer.createDiv("codex-agent-input-box");
+    const promptLine = inputBox.createDiv("codex-agent-prompt-line");
+    this.contextContainer = promptLine.createDiv("codex-agent-context-inline");
     this.renderContextChips();
 
-    this.promptInput = composer.createEl("textarea", {
+    this.promptInput = promptLine.createEl("textarea", {
       attr: {
         placeholder: "Ask Codex to analyze, rewrite, organize, or prepare safe vault edits..."
       }
     });
 
-    const footer = composer.createDiv("codex-agent-composer-footer");
+    const footer = inputBox.createDiv("codex-agent-composer-footer");
     const controls = footer.createDiv("codex-agent-composer-controls");
     const modeButton = controls.createEl("button", {
       cls: "codex-agent-pill-button",

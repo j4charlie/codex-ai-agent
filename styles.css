@@ -143,8 +143,9 @@
 .codex-agent-context-inline {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  min-height: 24px;
+  max-width: 100%;
 }
 
 .codex-agent-chip {
@@ -257,27 +258,49 @@
 }
 
 .codex-agent-composer {
+  display: block;
+}
+
+.codex-agent-input-box {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  gap: 10px;
+  min-height: 176px;
+  padding: 12px;
   border: 1px solid rgba(139, 183, 255, 0.35);
   border-radius: 8px;
-  background: rgba(139, 183, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 60px),
+    rgba(7, 8, 11, 0.55);
+}
+
+.codex-agent-prompt-line {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  gap: 6px;
 }
 
 .codex-agent-composer textarea {
-  width: 100%;
-  min-height: 92px;
-  resize: vertical;
-  padding: 10px;
-  border: 1px solid var(--codex-line);
-  border-radius: 7px;
+  flex: 1 1 160px;
+  min-width: 120px;
+  min-height: 110px;
+  resize: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   color: var(--codex-text);
-  background: rgba(7, 8, 11, 0.7);
+  background: transparent;
   font: inherit;
   font-size: 13px;
   line-height: 1.45;
+  outline: none;
+}
+
+.codex-agent-composer textarea::placeholder {
+  color: rgba(238, 241, 244, 0.45);
 }
 
 .codex-agent-composer-footer {
