@@ -260,11 +260,39 @@
   background: var(--codex-red);
 }
 
+.codex-agent-event.is-user .codex-agent-event-marker {
+  background: var(--codex-blue);
+}
+
+.codex-agent-event.is-response .codex-agent-event-marker {
+  background: var(--codex-green);
+}
+
+.codex-agent-event.is-usage .codex-agent-event-marker {
+  background: var(--codex-muted);
+}
+
 .codex-agent-event-content {
   padding: 9px 10px;
   border: 1px solid var(--codex-line);
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.035);
+}
+
+.codex-agent-event.is-response .codex-agent-event-content {
+  padding: 2px 0 10px;
+  border: 0;
+  background: transparent;
+}
+
+.codex-agent-event.is-user .codex-agent-event-content {
+  background: rgba(139, 183, 255, 0.08);
+}
+
+.codex-agent-event.is-usage .codex-agent-event-content {
+  padding: 7px 9px;
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .codex-agent-event-content h4 {
@@ -274,11 +302,31 @@
   font-weight: 760;
 }
 
+.codex-agent-event.is-response .codex-agent-event-content h4 {
+  color: var(--codex-green);
+}
+
+.codex-agent-event.is-usage .codex-agent-event-content h4 {
+  display: none;
+}
+
 .codex-agent-event-content p {
   margin: 0;
   color: var(--codex-muted);
   font-size: 12px;
   line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.codex-agent-event.is-response .codex-agent-event-content p {
+  color: var(--codex-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.codex-agent-event.is-usage .codex-agent-event-content p {
+  color: var(--codex-muted);
+  font-size: 11px;
 }
 
 .codex-agent-composer {

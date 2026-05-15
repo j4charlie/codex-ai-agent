@@ -35,7 +35,7 @@ interface ContextChip {
 interface TimelineItem {
   title: string;
   body: string;
-  tone: "thinking" | "tool" | "diff" | "command" | "done";
+  tone: "user" | "thinking" | "tool" | "command" | "response" | "usage" | "done";
 }
 
 export default class CodexForObsidianPlugin extends Plugin {
@@ -582,15 +582,20 @@ class CodexAgentView extends ItemView {
 
     this.timeline = [
       {
-        title: "Starting Codex",
-        body: `${this.mode === "ask" ? "Ask mode is read-only" : "Agent mode is running in read-only sandbox for this compatibility test"} with ${this.modelChoice}, ${this.reasoningLevel} reasoning, ${this.speedChoice} speed.`,
-        tone: "thinking"
+        title: "You",
+        body: target,
+        tone: "user"
       },
       {
-        title: "Read context",
-        body: `Prepared ${attached} structured context item${attached === 1 ? "" : "s"}: ${summary}.`,
+        title: "Context",
+        body: attached > 0 ? summary : "No attached context.",
         tone: "tool"
       },
+      {
+        title: "Codex",
+        body: `${this.mode === "ask" ? "Read-only ask" : "Read-only agent compatibility test"} · ${this.modelChoice} · ${this.reasoningLevel} · ${this.speedChoice}\n正在思考...`,
+        tone: "thinking"
+      }
     ];
 
     this.renderTimelineItems();
@@ -663,11 +668,13 @@ class CodexAgentView extends ItemView {
       this.runningProcess = null;
       this.runButton?.setText("Run Codex");
       this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "已完成" : "运行失败");
-      this.appendTimelineItem({
-        title: "Codex exited",
-        body: `Process exited with code ${code ?? "unknown"}.`,
-        tone: code === 0 ? "done" : "command"
-      });
+      if (code !== 0) {
+        this.appendTimelineItem({
+          title: "Run failed",
+          body: `Codex exited with code ${code ?? "unknown"}.`,
+          tone: "command"
+        });
+      }
     });
   }
 
@@ -771,8 +778,12 @@ class CodexAgentView extends ItemView {
     }
 
     if (!trimmed.startsWith("{")) {
+      if (this.shouldIgnoreCodexLog(trimmed)) {
+        return;
+      }
+
       this.appendTimelineItem({
-        title: stream === "stderr" ? "Codex stderr" : "Codex log",
+        title: stream === "stderr" ? "Diagnostic" : "Log",
         body: trimmed.length > 500 ? `${trimmed.slice(0, 500)}...` : trimmed,
         tone: "command"
       });
@@ -781,7 +792,10 @@ class CodexAgentView extends ItemView {
 
     try {
       const event = JSON.parse(trimmed);
-      this.appendTimelineItem(this.mapCodexEvent(event));
+      const mapped = this.mapCodexEvent(event);
+      if (mapped) {
+        this.appendTimelineItem(mapped);
+      }
     } catch {
       this.appendTimelineItem({
         title: "Unparsed Codex output",
@@ -791,23 +805,15 @@ class CodexAgentView extends ItemView {
     }
   }
 
-  private mapCodexEvent(event: any): TimelineItem {
+  private mapCodexEvent(event: any): TimelineItem | null {
     if (event.type === "thread.started") {
       this.setLiveStatus("thinking", "正在思考");
-      return {
-        title: "Thread started",
-        body: event.thread_id ?? "New Codex thread started.",
-        tone: "thinking"
-      };
+      return null;
     }
 
     if (event.type === "turn.started") {
       this.setLiveStatus("thinking", "正在思考");
-      return {
-        title: "Turn started",
-        body: "Codex started processing the request.",
-        tone: "thinking"
-      };
+      return null;
     }
 
     if (event.type === "item.completed") {
@@ -817,13 +823,13 @@ class CodexAgentView extends ItemView {
         return {
           title: "Codex response",
           body: item.text ?? "",
-          tone: "done"
+          tone: "response"
         };
       }
       this.setLiveStatus(item.type?.includes("command") ? "running" : "thinking", item.type?.includes("command") ? "正在运行" : "正在处理");
       return {
-        title: `Codex item: ${item.type ?? "unknown"}`,
-        body: JSON.stringify(item).slice(0, 700),
+        title: item.type?.includes("command") ? "Command" : "Tool",
+        body: this.describeCodexItem(item),
         tone: item.type?.includes("command") ? "command" : "tool"
       };
     }
@@ -832,17 +838,36 @@ class CodexAgentView extends ItemView {
       this.setLiveStatus("done", "已完成");
       const usage = event.usage;
       return {
-        title: "Turn completed",
-        body: usage ? `input ${usage.input_tokens}, cached ${usage.cached_input_tokens}, output ${usage.output_tokens}, reasoning ${usage.reasoning_output_tokens}` : "Codex turn completed.",
-        tone: "done"
+        title: "Usage",
+        body: usage ? `input ${usage.input_tokens} · cached ${usage.cached_input_tokens} · output ${usage.output_tokens} · reasoning ${usage.reasoning_output_tokens}` : "Turn completed.",
+        tone: "usage"
       };
     }
 
     return {
-      title: `Codex event: ${event.type ?? "unknown"}`,
+      title: event.type ?? "Codex event",
       body: JSON.stringify(event).slice(0, 700),
       tone: "tool"
     };
+  }
+
+  private shouldIgnoreCodexLog(line: string) {
+    return line.includes("WARN codex_core_plugins")
+      || line.includes("WARN codex_core_skills")
+      || line.includes("WARN codex_rollout::list")
+      || line.includes("Cloudflare")
+      || line.includes("<html>")
+      || line.includes("Enable JavaScript and cookies");
+  }
+
+  private describeCodexItem(item: any) {
+    if (item.command) {
+      return Array.isArray(item.command) ? item.command.join(" ") : String(item.command);
+    }
+    if (item.text) {
+      return item.text;
+    }
+    return JSON.stringify(item).slice(0, 700);
   }
 
   private setLiveStatus(status: "idle" | "thinking" | "running" | "done" | "error", text: string) {
