@@ -198,7 +198,7 @@ class CodexAgentView extends ItemView {
       tone: "done"
     }
   ];
-  private promptInput: HTMLTextAreaElement | null = null;
+  private promptInput: HTMLElement | null = null;
   private contextContainer: HTMLElement | null = null;
   private timelineContainer: HTMLElement | null = null;
   private modeButtons: Partial<Record<AgentMode, HTMLButtonElement>> = {};
@@ -328,9 +328,11 @@ class CodexAgentView extends ItemView {
     this.contextContainer = promptLine.createDiv("codex-agent-context-inline");
     this.renderContextChips();
 
-    this.promptInput = promptLine.createEl("textarea", {
+    this.promptInput = promptLine.createDiv({
+      cls: "codex-agent-prompt-input",
       attr: {
-        placeholder: "Ask Codex to analyze, rewrite, organize, or prepare safe vault edits..."
+        contenteditable: "true",
+        "data-placeholder": "Ask Codex to analyze, rewrite, organize, or prepare safe vault edits..."
       }
     });
 
@@ -391,7 +393,7 @@ class CodexAgentView extends ItemView {
   }
 
   private runDemo() {
-    const prompt = this.promptInput?.value.trim();
+    const prompt = this.promptInput?.innerText.trim();
     const target = prompt || "整理当前笔记，并给出可审查的修改建议";
     const attached = this.contextChips.length || 1;
 

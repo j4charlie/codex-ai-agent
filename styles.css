@@ -264,6 +264,7 @@
 .codex-agent-input-box {
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   gap: 10px;
   min-height: 176px;
   padding: 12px;
@@ -279,28 +280,30 @@
   flex: 1 1 auto;
   flex-wrap: wrap;
   align-content: flex-start;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 6px;
+  min-height: 112px;
+  cursor: text;
 }
 
-.codex-agent-composer textarea {
-  flex: 1 1 160px;
-  min-width: 120px;
-  min-height: 110px;
-  resize: none;
+.codex-agent-prompt-input {
+  flex: 1 1 120px;
+  min-width: 80px;
+  min-height: 24px;
   padding: 0;
-  border: 0;
-  border-radius: 0;
   color: var(--codex-text);
-  background: transparent;
   font: inherit;
   font-size: 13px;
   line-height: 1.45;
   outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.codex-agent-composer textarea::placeholder {
+.codex-agent-prompt-input:empty::before {
+  content: attr(data-placeholder);
   color: rgba(238, 241, 244, 0.45);
+  pointer-events: none;
 }
 
 .codex-agent-composer-footer {
