@@ -47,6 +47,201 @@ interface AgentSession {
   runStartedAt: number;
 }
 
+type AgentRuntimeState = "idle" | "thinking" | "running" | "done" | "error";
+
+type AgentEvent =
+  | { type: "status"; state: AgentRuntimeState; title: string; detail?: string }
+  | { type: "message"; markdown: string }
+  | { type: "command"; command: string; cwd?: string; status: "running" | "done" | "failed" }
+  | { type: "approval"; id: string; command: string; cwd?: string; reason?: string }
+  | { type: "error"; title: string; message: string };
+
+interface CodexRunRequest {
+  codexBin: string;
+  args: string[];
+  cwd: string;
+  prompt: string;
+}
+
+interface AgentRunHandle {
+  cancel(): void;
+}
+
+interface CodexAdapter {
+  start(
+    request: CodexRunRequest,
+    onEvent: (event: AgentEvent) => void,
+    onClose: (code: number | null) => void
+  ): AgentRunHandle;
+}
+
+class ExecJsonAdapter implements CodexAdapter {
+  start(
+    request: CodexRunRequest,
+    onEvent: (event: AgentEvent) => void,
+    onClose: (code: number | null) => void
+  ): AgentRunHandle {
+    const child = spawn(request.codexBin, request.args, {
+      cwd: request.cwd,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    child.stdin.write(request.prompt);
+    child.stdin.end();
+
+    child.stdout.on("data", (chunk: any) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() ?? "";
+      lines.forEach((line) => this.handleLine(line, onEvent));
+    });
+
+    child.stderr.on("data", (chunk: any) => {
+      onEvent({ type: "status", state: "running", title: "正在运行" });
+      stderrBuffer += chunk.toString();
+      const lines = stderrBuffer.split(/\r?\n/);
+      stderrBuffer = lines.pop() ?? "";
+      lines.forEach((line) => this.handleLine(line, onEvent));
+    });
+
+    child.on("error", (error: Error) => {
+      onEvent({
+        type: "error",
+        title: "Codex failed to start",
+        message: `${error.message}. Tried: ${request.codexBin}`
+      });
+    });
+
+    child.on("close", (code: number | null) => {
+      if (stdoutBuffer.trim()) {
+        this.handleLine(stdoutBuffer, onEvent);
+      }
+      if (stderrBuffer.trim()) {
+        this.handleLine(stderrBuffer, onEvent);
+      }
+      onClose(code);
+    });
+
+    return {
+      cancel: () => child.kill()
+    };
+  }
+
+  private handleLine(line: string, onEvent: (event: AgentEvent) => void) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    if (!trimmed.startsWith("{")) {
+      if (this.shouldIgnoreCodexLog(trimmed)) {
+        return;
+      }
+
+      onEvent({
+        type: "status",
+        state: "running",
+        title: "正在运行",
+        detail: trimmed.length > 160 ? `${trimmed.slice(0, 160)}...` : trimmed
+      });
+      return;
+    }
+
+    try {
+      const event = JSON.parse(trimmed);
+      this.mapCodexEvent(event, onEvent);
+    } catch {
+      onEvent({
+        type: "error",
+        title: "Unparsed Codex output",
+        message: trimmed
+      });
+    }
+  }
+
+  private mapCodexEvent(event: any, onEvent: (event: AgentEvent) => void) {
+    if (event.type === "thread.started" || event.type === "turn.started") {
+      onEvent({ type: "status", state: "thinking", title: "正在思考" });
+      return;
+    }
+
+    if (event.type === "item.completed") {
+      const item = event.item ?? {};
+      if (item.type === "agent_message") {
+        onEvent({ type: "status", state: "thinking", title: "正在整理回复" });
+        onEvent({ type: "message", markdown: item.text ?? "" });
+        return;
+      }
+
+      if (item.type?.includes("command")) {
+        onEvent({
+          type: "command",
+          command: this.describeCodexItem(item),
+          status: "running"
+        });
+        return;
+      }
+
+      onEvent({
+        type: "status",
+        state: "thinking",
+        title: "正在处理",
+        detail: this.describeCodexItem(item)
+      });
+      return;
+    }
+
+    if (event.type === "turn.completed") {
+      const usage = event.usage;
+      onEvent({
+        type: "status",
+        state: "done",
+        title: "已完成",
+        detail: usage ? `input ${usage.input_tokens} · cached ${usage.cached_input_tokens} · output ${usage.output_tokens} · reasoning ${usage.reasoning_output_tokens}` : ""
+      });
+      return;
+    }
+
+    onEvent({
+      type: "status",
+      state: "thinking",
+      title: "正在处理",
+      detail: JSON.stringify(event).slice(0, 160)
+    });
+  }
+
+  private shouldIgnoreCodexLog(line: string) {
+    return line.includes("WARN codex_core_plugins")
+      || line.includes("WARN codex_core_skills")
+      || line.includes("WARN codex_rollout::list")
+      || line.includes("Cloudflare")
+      || line.includes("<html>")
+      || line.includes("Enable JavaScript and cookies");
+  }
+
+  private describeCodexItem(item: any) {
+    if (item.command) {
+      return Array.isArray(item.command) ? item.command.join(" ") : String(item.command);
+    }
+    if (item.text) {
+      return item.text;
+    }
+    return JSON.stringify(item).slice(0, 700);
+  }
+}
+
+class PtyCodexAdapter implements CodexAdapter {
+  start(
+    _request: CodexRunRequest,
+    _onEvent: (event: AgentEvent) => void,
+    _onClose: (code: number | null) => void
+  ): AgentRunHandle {
+    throw new Error("PTY adapter is not implemented yet.");
+  }
+}
+
 export default class CodexForObsidianPlugin extends Plugin {
   private selectionButtonEl: HTMLElement | null = null;
 
@@ -209,6 +404,7 @@ export default class CodexForObsidianPlugin extends Plugin {
 
 class CodexAgentView extends ItemView {
   private mode: AgentMode = "agent";
+  private adapterMode: "exec-json" | "pty" = "exec-json";
   private contextChips: ContextChip[] = [];
   private reasoningLevel: ReasoningLevel = "中";
   private modelChoice: ModelChoice = "GPT-5.5";
@@ -225,7 +421,8 @@ class CodexAgentView extends ItemView {
   private modelButton: HTMLButtonElement | null = null;
   private speedButton: HTMLButtonElement | null = null;
   private runButton: HTMLButtonElement | null = null;
-  private runningProcess: any = null;
+  private runningProcess: AgentRunHandle | null = null;
+  private isCancellingRun = false;
   private liveStatusEl: HTMLElement | null = null;
   private liveStatusTextEl: HTMLElement | null = null;
   private elapsedTimer: number | null = null;
@@ -248,7 +445,8 @@ class CodexAgentView extends ItemView {
   async onClose() {
     this.stopElapsedTimer();
     if (this.runningProcess) {
-      this.runningProcess.kill();
+      this.isCancellingRun = true;
+      this.runningProcess.cancel();
       this.runningProcess = null;
     }
   }
@@ -667,7 +865,8 @@ class CodexAgentView extends ItemView {
 
   private async runCodex() {
     if (this.runningProcess) {
-      this.runningProcess.kill();
+      this.isCancellingRun = true;
+      this.runningProcess.cancel();
       this.runningProcess = null;
       this.runButton?.setText("↑");
       this.stopElapsedTimer();
@@ -705,6 +904,7 @@ class CodexAgentView extends ItemView {
     session.statusItemIndex = 0;
     session.runStartedAt = Date.now();
     this.runningSessionId = session.id;
+    this.isCancellingRun = false;
     this.renderSessionTabs();
     this.startElapsedTimer();
 
@@ -729,69 +929,20 @@ class CodexAgentView extends ItemView {
     ];
 
     const codexBin = process.env.CODEX_BIN || DEFAULT_CODEX_BIN;
-    const child = spawn(codexBin, args, {
-      cwd: vaultPath,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-
-    this.runningProcess = child;
+    const adapter = this.getCodexAdapter();
+    this.runningProcess = adapter.start(
+      {
+        codexBin,
+        args,
+        cwd: vaultPath,
+        prompt: this.composeCodexPrompt(payload)
+      },
+      (event) => this.handleAgentEvent(event),
+      (code) => this.handleAgentClose(code)
+    );
     this.runButton?.setText("■");
     this.setLiveStatus("thinking", "正在思考");
     this.clearComposer();
-
-    child.stdin.write(this.composeCodexPrompt(payload));
-    child.stdin.end();
-
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
-
-    child.stdout.on("data", (chunk: any) => {
-      stdoutBuffer += chunk.toString();
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      lines.forEach((line) => this.handleCodexLine(line, "stdout"));
-    });
-
-    child.stderr.on("data", (chunk: any) => {
-      this.setLiveStatus("running", "正在运行");
-      stderrBuffer += chunk.toString();
-      const lines = stderrBuffer.split(/\r?\n/);
-      stderrBuffer = lines.pop() ?? "";
-      lines.forEach((line) => this.handleCodexLine(line, "stderr"));
-    });
-
-    child.on("error", (error: Error) => {
-      this.setLiveStatus("error", "启动失败");
-      this.appendTimelineItem({
-        title: "Codex failed to start",
-        body: `${error.message}. Tried: ${codexBin}`,
-        tone: "command"
-      });
-    });
-
-    child.on("close", (code: number | null) => {
-      if (stdoutBuffer.trim()) {
-        this.handleCodexLine(stdoutBuffer, "stdout");
-      }
-      if (stderrBuffer.trim()) {
-        this.handleCodexLine(stderrBuffer, "stderr");
-      }
-
-      this.runningProcess = null;
-      this.runningSessionId = null;
-      this.runButton?.setText("↑");
-      this.stopElapsedTimer();
-      this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "已完成" : "运行失败");
-      if (code !== 0) {
-        this.appendTimelineItem({
-          title: "Run failed",
-          body: `Codex exited with code ${code ?? "unknown"}.`,
-          tone: "command"
-        });
-      } else {
-        this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
-      }
-    });
   }
 
   private getPromptText() {
@@ -903,93 +1054,87 @@ class CodexAgentView extends ItemView {
     return this.mode === "agent" ? "workspace-write" : "read-only";
   }
 
-  private handleCodexLine(line: string, stream: "stdout" | "stderr") {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
+  private getCodexAdapter(): CodexAdapter {
+    if (this.adapterMode === "pty") {
+      return new PtyCodexAdapter();
     }
+    return new ExecJsonAdapter();
+  }
 
-    if (!trimmed.startsWith("{")) {
-      if (this.shouldIgnoreCodexLog(trimmed)) {
-        return;
-      }
-
-      this.updateTranscriptStatus(`正在运行 ${this.getElapsedLabel()}`, trimmed.length > 160 ? `${trimmed.slice(0, 160)}...` : trimmed);
-      return;
-    }
-
-    try {
-      const event = JSON.parse(trimmed);
-      const mapped = this.mapCodexEvent(event);
-      if (mapped) {
-        this.appendTimelineItem(mapped);
-      }
-    } catch {
+  private handleAgentEvent(event: AgentEvent) {
+    if (event.type === "message") {
+      this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
       this.appendTimelineItem({
-        title: "Unparsed Codex output",
-        body: trimmed,
+        title: "",
+        body: event.markdown,
+        tone: "response"
+      });
+      return;
+    }
+
+    if (event.type === "command") {
+      this.setLiveStatus("running", "正在运行");
+      this.updateTranscriptStatus(`正在运行 ${this.getElapsedLabel()}`, event.command);
+      return;
+    }
+
+    if (event.type === "approval") {
+      this.setLiveStatus("running", "等待审批");
+      this.updateTranscriptStatus("等待审批", event.reason ?? event.command);
+      return;
+    }
+
+    if (event.type === "error") {
+      this.setLiveStatus("error", event.title);
+      this.appendTimelineItem({
+        title: event.title,
+        body: event.message,
         tone: "command"
       });
+      return;
+    }
+
+    this.setLiveStatus(event.state, event.title);
+    this.updateTranscriptStatus(this.formatStatusTitle(event), event.detail ?? "");
+  }
+
+  private handleAgentClose(code: number | null) {
+    if (this.isCancellingRun) {
+      this.isCancellingRun = false;
+      this.runningProcess = null;
+      this.runningSessionId = null;
+      this.runButton?.setText("↑");
+      this.stopElapsedTimer();
+      return;
+    }
+
+    this.runningProcess = null;
+    this.runningSessionId = null;
+    this.runButton?.setText("↑");
+    this.stopElapsedTimer();
+    this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "已完成" : "运行失败");
+    if (code !== 0) {
+      this.appendTimelineItem({
+        title: "Run failed",
+        body: `Codex exited with code ${code ?? "unknown"}.`,
+        tone: "command"
+      });
+    } else {
+      this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
     }
   }
 
-  private mapCodexEvent(event: any): TimelineItem | null {
-    if (event.type === "thread.started") {
-      this.setLiveStatus("thinking", "正在思考");
-      this.updateTranscriptStatus("正在思考");
-      return null;
+  private formatStatusTitle(event: Extract<AgentEvent, { type: "status" }>) {
+    if (event.state === "done") {
+      return `已处理 ${this.getElapsedLabel()}`;
     }
-
-    if (event.type === "turn.started") {
-      this.setLiveStatus("thinking", "正在思考");
-      this.updateTranscriptStatus("正在思考");
-      return null;
+    if (event.state === "running") {
+      return `${event.title} ${this.getElapsedLabel()}`;
     }
-
-    if (event.type === "item.completed") {
-      const item = event.item ?? {};
-      if (item.type === "agent_message") {
-        this.setLiveStatus("thinking", "正在整理回复");
-        this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
-        return {
-          title: "",
-          body: item.text ?? "",
-          tone: "response"
-        };
-      }
-      this.setLiveStatus(item.type?.includes("command") ? "running" : "thinking", item.type?.includes("command") ? "正在运行" : "正在处理");
-      this.updateTranscriptStatus(item.type?.includes("command") ? `正在运行 ${this.getElapsedLabel()}` : `正在处理 ${this.getElapsedLabel()}`, this.describeCodexItem(item));
-      return null;
+    if (event.state === "thinking") {
+      return `${event.title} ${this.getElapsedLabel()}`;
     }
-
-    if (event.type === "turn.completed") {
-      this.setLiveStatus("done", "已完成");
-      const usage = event.usage;
-      this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, usage ? `input ${usage.input_tokens} · cached ${usage.cached_input_tokens} · output ${usage.output_tokens} · reasoning ${usage.reasoning_output_tokens}` : "");
-      return null;
-    }
-
-    this.updateTranscriptStatus("正在处理", JSON.stringify(event).slice(0, 160));
-    return null;
-  }
-
-  private shouldIgnoreCodexLog(line: string) {
-    return line.includes("WARN codex_core_plugins")
-      || line.includes("WARN codex_core_skills")
-      || line.includes("WARN codex_rollout::list")
-      || line.includes("Cloudflare")
-      || line.includes("<html>")
-      || line.includes("Enable JavaScript and cookies");
-  }
-
-  private describeCodexItem(item: any) {
-    if (item.command) {
-      return Array.isArray(item.command) ? item.command.join(" ") : String(item.command);
-    }
-    if (item.text) {
-      return item.text;
-    }
-    return JSON.stringify(item).slice(0, 700);
+    return event.title;
   }
 
   private setLiveStatus(status: "idle" | "thinking" | "running" | "done" | "error", text: string) {
@@ -1085,7 +1230,8 @@ class CodexAgentView extends ItemView {
 
   private closeSession(sessionId: string) {
     if (this.runningSessionId === sessionId && this.runningProcess) {
-      this.runningProcess.kill();
+      this.isCancellingRun = true;
+      this.runningProcess.cancel();
       this.runningProcess = null;
       this.runningSessionId = null;
       this.stopElapsedTimer();
