@@ -10,6 +10,7 @@ const {
 const { spawn } = require("child_process");
 
 const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
+const DEFAULT_CODEX_BIN = "/Users/charlieli/.local/bin/codex";
 
 module.exports = class CodexForObsidianPlugin extends Plugin {
   constructor(app, manifest) {
@@ -567,7 +568,8 @@ class CodexAgentView extends ItemView {
       "-"
     ];
 
-    const child = spawn("codex", args, {
+    const codexBin = process.env.CODEX_BIN || DEFAULT_CODEX_BIN;
+    const child = spawn(codexBin, args, {
       cwd: vaultPath,
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -598,7 +600,7 @@ class CodexAgentView extends ItemView {
     child.on("error", (error) => {
       this.appendTimelineItem({
         title: "Codex failed to start",
-        body: error.message,
+        body: `${error.message}. Tried: ${codexBin}`,
         tone: "command"
       });
     });

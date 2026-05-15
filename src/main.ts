@@ -12,9 +12,11 @@ import {
 } from "obsidian";
 
 declare const require: any;
+declare const process: any;
 const { spawn } = require("child_process");
 
 const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
+const DEFAULT_CODEX_BIN = "/Users/charlieli/.local/bin/codex";
 
 type AgentMode = "ask" | "agent";
 type ReasoningLevel = "智能" | "低" | "中" | "高" | "超高";
@@ -587,7 +589,8 @@ class CodexAgentView extends ItemView {
       "-"
     ];
 
-    const child = spawn("codex", args, {
+    const codexBin = process.env.CODEX_BIN || DEFAULT_CODEX_BIN;
+    const child = spawn(codexBin, args, {
       cwd: vaultPath,
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -618,7 +621,7 @@ class CodexAgentView extends ItemView {
     child.on("error", (error: Error) => {
       this.appendTimelineItem({
         title: "Codex failed to start",
-        body: error.message,
+        body: `${error.message}. Tried: ${codexBin}`,
         tone: "command"
       });
     });
