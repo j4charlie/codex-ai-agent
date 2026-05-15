@@ -14,6 +14,9 @@ import {
 const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 
 type AgentMode = "ask" | "agent";
+type ReasoningLevel = "智能" | "低" | "中" | "高" | "超高";
+type ModelChoice = "GPT-5.5" | "GPT-5.4" | "GPT-5.4 Mini" | "GPT-5.3 Codex";
+type SpeedChoice = "标准" | "快速";
 
 interface ContextChip {
   id: string;
@@ -193,6 +196,9 @@ export default class CodexForObsidianPlugin extends Plugin {
 class CodexAgentView extends ItemView {
   private mode: AgentMode = "agent";
   private contextChips: ContextChip[] = [];
+  private reasoningLevel: ReasoningLevel = "中";
+  private modelChoice: ModelChoice = "GPT-5.5";
+  private speedChoice: SpeedChoice = "标准";
   private timeline: TimelineItem[] = [
     {
       title: "Ready",
@@ -202,7 +208,9 @@ class CodexAgentView extends ItemView {
   ];
   private promptInput: HTMLElement | null = null;
   private timelineContainer: HTMLElement | null = null;
-  private modeButtons: Partial<Record<AgentMode, HTMLButtonElement>> = {};
+  private modeButton: HTMLButtonElement | null = null;
+  private modelButton: HTMLButtonElement | null = null;
+  private speedButton: HTMLButtonElement | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -222,7 +230,6 @@ class CodexAgentView extends ItemView {
     container.addClass("codex-agent-panel");
 
     this.renderHeader(container);
-    this.renderModeSwitch(container);
     this.renderTimeline(container);
     this.renderComposer(container);
   }
@@ -236,30 +243,6 @@ class CodexAgentView extends ItemView {
     const status = header.createDiv("codex-agent-status");
     status.createSpan("codex-agent-status-dot");
     status.createSpan({ text: "CLI ready" });
-  }
-
-  private renderModeSwitch(container: Element) {
-    const section = container.createDiv("codex-agent-section codex-agent-mode-row");
-    this.modeButtons.ask = this.createModeButton(section, "ask", "Ask", "Read-only planning and research");
-    this.modeButtons.agent = this.createModeButton(section, "agent", "Agent", "Reviewable vault edits and commands");
-    this.updateModeButtons();
-  }
-
-  private createModeButton(parent: HTMLElement, mode: AgentMode, label: string, caption: string) {
-    const button = parent.createEl("button", { cls: "codex-agent-mode" });
-    button.createSpan({ cls: "codex-agent-mode-label", text: label });
-    button.createSpan({ cls: "codex-agent-mode-caption", text: caption });
-    button.addEventListener("click", () => {
-      this.mode = mode;
-      this.updateModeButtons();
-    });
-    return button;
-  }
-
-  private updateModeButtons() {
-    Object.entries(this.modeButtons).forEach(([mode, button]) => {
-      button?.toggleClass("is-active", mode === this.mode);
-    });
   }
 
   private renderTimeline(container: Element) {
@@ -301,16 +284,85 @@ class CodexAgentView extends ItemView {
 
     const footer = inputBox.createDiv("codex-agent-composer-footer");
     const controls = footer.createDiv("codex-agent-composer-controls");
-    const modeButton = controls.createEl("button", { cls: "codex-agent-pill-button", text: this.mode === "agent" ? "Agent" : "Ask" });
-    modeButton.addEventListener("click", () => {
-      this.mode = this.mode === "agent" ? "ask" : "agent";
-      modeButton.setText(this.mode === "agent" ? "Agent" : "Ask");
-      this.updateModeButtons();
-    });
-    controls.createSpan({ text: "Auto" });
+    this.modeButton = controls.createEl("button", { cls: "codex-agent-pill-button", text: this.mode === "agent" ? "Agent" : "Ask" });
+    this.modeButton.addEventListener("click", (event) => this.openModeMenu(event));
+
+    this.modelButton = controls.createEl("button", { cls: "codex-agent-select-button", text: this.modelChoice });
+    this.modelButton.addEventListener("click", (event) => this.openModelMenu(event));
+
+    this.speedButton = controls.createEl("button", { cls: "codex-agent-select-button", text: `${this.reasoningLevel} · ${this.speedChoice}` });
+    this.speedButton.addEventListener("click", (event) => this.openReasoningMenu(event));
 
     const runButton = footer.createEl("button", { cls: "mod-cta", text: "Run demo" });
     runButton.addEventListener("click", () => this.runDemo());
+  }
+
+  private openModeMenu(event: MouseEvent) {
+    const menu = new Menu();
+    (["ask", "agent"] as AgentMode[]).forEach((mode) => {
+      menu.addItem((item) => {
+        item
+          .setTitle(mode === "agent" ? "Agent" : "Ask")
+          .setChecked(this.mode === mode)
+          .onClick(() => {
+            this.mode = mode;
+            this.updateComposerControls();
+          });
+      });
+    });
+    menu.showAtMouseEvent(event);
+  }
+
+  private openModelMenu(event: MouseEvent) {
+    const menu = new Menu();
+    (["GPT-5.5", "GPT-5.4", "GPT-5.4 Mini", "GPT-5.3 Codex"] as ModelChoice[]).forEach((model) => {
+      menu.addItem((item) => {
+        item
+          .setTitle(model)
+          .setChecked(this.modelChoice === model)
+          .onClick(() => {
+            this.modelChoice = model;
+            this.updateComposerControls();
+          });
+      });
+    });
+    menu.showAtMouseEvent(event);
+  }
+
+  private openReasoningMenu(event: MouseEvent) {
+    const menu = new Menu();
+    (["智能", "低", "中", "高", "超高"] as ReasoningLevel[]).forEach((level) => {
+      menu.addItem((item) => {
+        item
+          .setTitle(level)
+          .setChecked(this.reasoningLevel === level)
+          .onClick(() => {
+            this.reasoningLevel = level;
+            this.updateComposerControls();
+          });
+      });
+    });
+
+    menu.addSeparator();
+    (["标准", "快速"] as SpeedChoice[]).forEach((speed) => {
+      menu.addItem((item) => {
+        item
+          .setTitle(speed)
+          .setChecked(this.speedChoice === speed)
+          .onClick(() => {
+            this.speedChoice = speed;
+            this.updateComposerControls();
+          });
+      });
+    });
+
+    menu.showAtMouseEvent(event);
+  }
+
+  private updateComposerControls() {
+    this.modeButton?.setText(this.mode === "agent" ? "Agent" : "Ask");
+    this.modelButton?.setText(this.modelChoice);
+    this.speedButton?.setText(`${this.reasoningLevel} · ${this.speedChoice}`);
   }
 
   addFileContext(file: TFile) {
@@ -489,7 +541,7 @@ class CodexAgentView extends ItemView {
     this.timeline = [
       {
         title: "Plan",
-        body: `${this.mode === "ask" ? "Ask mode will stay read-only" : "Agent mode will prepare reviewable changes"} for: ${target}`,
+        body: `${this.mode === "ask" ? "Ask mode will stay read-only" : "Agent mode will prepare reviewable changes"} with ${this.modelChoice}, ${this.reasoningLevel} reasoning, ${this.speedChoice} speed for: ${target}`,
         tone: "thinking"
       },
       {

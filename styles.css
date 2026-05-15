@@ -99,47 +99,6 @@
   font-size: 12px;
 }
 
-.codex-agent-mode-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 8px;
-}
-
-.codex-agent-mode {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  min-width: 0;
-  min-height: 62px;
-  padding: 10px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  color: var(--codex-muted);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.codex-agent-mode.is-active {
-  border-color: rgba(139, 183, 255, 0.45);
-  color: var(--codex-text);
-  background: rgba(139, 183, 255, 0.12);
-}
-
-.codex-agent-mode-label {
-  color: inherit;
-  font-size: 13px;
-  font-weight: 750;
-}
-
-.codex-agent-mode-caption {
-  color: var(--codex-muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
 .codex-agent-chip {
   display: inline-flex;
   align-items: center;
@@ -313,6 +272,23 @@
   background: var(--codex-panel-2);
   font-size: 12px;
   cursor: pointer;
+}
+
+.codex-agent-select-button {
+  min-height: 25px;
+  padding: 4px 4px;
+  border: 0;
+  color: var(--codex-text);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.codex-agent-select-button::after,
+.codex-agent-pill-button::after {
+  content: "⌄";
+  margin-left: 5px;
+  color: var(--codex-muted);
 }
 
 .codex-agent-composer-footer > .mod-cta {
