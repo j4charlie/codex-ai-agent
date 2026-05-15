@@ -225,21 +225,9 @@ class CodexAgentView extends ItemView {
     container.empty();
     container.addClass("codex-agent-panel");
 
-    this.renderHeader(container);
     this.renderTabs(container);
     this.renderTimeline(container);
     this.renderComposer(container);
-  }
-
-  renderHeader(container) {
-    const header = container.createDiv("codex-agent-header");
-    const titleWrap = header.createDiv();
-    titleWrap.createEl("p", { cls: "codex-agent-kicker", text: "LOCAL FOREGROUND AGENT" });
-    titleWrap.createEl("h2", { text: "Codex Agent" });
-
-    const status = header.createDiv("codex-agent-status");
-    status.createSpan("codex-agent-status-dot");
-    status.createSpan({ text: "CLI ready" });
   }
 
   renderTabs(container) {

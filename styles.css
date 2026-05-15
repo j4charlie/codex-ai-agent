@@ -31,53 +31,6 @@
   box-sizing: border-box;
 }
 
-.codex-agent-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 2px 4px;
-}
-
-.codex-agent-header h2 {
-  margin: 0;
-  color: var(--codex-text);
-  font-size: 22px;
-  font-weight: 720;
-  letter-spacing: 0;
-}
-
-.codex-agent-kicker {
-  margin: 0 0 4px;
-  color: var(--codex-muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-.codex-agent-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: 0 0 auto;
-  margin-top: 2px;
-  padding: 6px 8px;
-  border: 1px solid var(--codex-line);
-  border-radius: 999px;
-  color: var(--codex-green);
-  background: rgba(121, 213, 159, 0.08);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.codex-agent-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--codex-green);
-  box-shadow: 0 0 0 4px rgba(121, 213, 159, 0.12);
-}
-
 .codex-agent-section {
   padding: 12px;
   border: 1px solid var(--codex-line);
