@@ -140,14 +140,6 @@
   line-height: 1.35;
 }
 
-.codex-agent-context-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-}
-
 .codex-agent-chip {
   display: inline-flex;
   align-items: center;
@@ -160,6 +152,8 @@
   color: var(--codex-text);
   background: rgba(139, 183, 255, 0.12);
   font-size: 12px;
+  vertical-align: baseline;
+  user-select: none;
 }
 
 .codex-agent-chip.is-selection-summary {
@@ -275,21 +269,9 @@
     rgba(7, 8, 11, 0.55);
 }
 
-.codex-agent-prompt-line {
-  display: flex;
+.codex-agent-prompt-editor {
   flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  align-items: baseline;
-  gap: 6px;
   min-height: 112px;
-  cursor: text;
-}
-
-.codex-agent-prompt-input {
-  flex: 1 1 120px;
-  min-width: 80px;
-  min-height: 24px;
   padding: 0;
   color: var(--codex-text);
   font: inherit;
@@ -298,9 +280,10 @@
   outline: none;
   white-space: pre-wrap;
   word-break: break-word;
+  cursor: text;
 }
 
-.codex-agent-prompt-input:empty::before {
+.codex-agent-prompt-editor.is-empty::before {
   content: attr(data-placeholder);
   color: rgba(238, 241, 244, 0.45);
   pointer-events: none;

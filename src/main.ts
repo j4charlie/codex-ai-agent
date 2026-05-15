@@ -199,7 +199,6 @@ class CodexAgentView extends ItemView {
     }
   ];
   private promptInput: HTMLElement | null = null;
-  private contextContainer: HTMLElement | null = null;
   private timelineContainer: HTMLElement | null = null;
   private modeButtons: Partial<Record<AgentMode, HTMLButtonElement>> = {};
 
@@ -261,42 +260,6 @@ class CodexAgentView extends ItemView {
     });
   }
 
-  private renderContextChips() {
-    if (!this.contextContainer) {
-      return;
-    }
-
-    this.contextContainer.empty();
-
-    const groupedSelectionCount = this.contextChips.filter((chip) => chip.kind === "selection").length;
-    const nonSelectionChips = this.contextChips.filter((chip) => chip.kind !== "selection");
-
-    if (groupedSelectionCount > 0) {
-      const chipEl = this.contextContainer.createDiv("codex-agent-chip is-selection-summary");
-      chipEl.createSpan({ cls: "codex-agent-chip-icon", text: "∞" });
-      chipEl.createSpan({ cls: "codex-agent-chip-label", text: `${groupedSelectionCount}个已选文本片段` });
-      const remove = chipEl.createEl("button", { text: "×", attr: { "aria-label": "Remove selected text context" } });
-      remove.addEventListener("click", () => {
-        this.contextChips = this.contextChips.filter((item) => item.kind !== "selection");
-        this.renderContextChips();
-      });
-    }
-
-    nonSelectionChips.forEach((chip) => {
-      const chipEl = this.contextContainer!.createDiv("codex-agent-chip");
-      chipEl.createSpan({
-        cls: `codex-agent-chip-icon is-${chip.kind}`,
-        text: chip.kind === "folder" ? "▣" : "◉"
-      });
-      chipEl.createSpan({ cls: "codex-agent-chip-label", text: chip.label });
-      const remove = chipEl.createEl("button", { text: "×", attr: { "aria-label": `Remove ${chip.label}` } });
-      remove.addEventListener("click", () => {
-        this.contextChips = this.contextChips.filter((item) => item.id !== chip.id);
-        this.renderContextChips();
-      });
-    });
-  }
-
   private renderTimeline(container: Element) {
     const section = container.createDiv("codex-agent-section codex-agent-workbench");
     const head = section.createDiv("codex-agent-section-head");
@@ -324,17 +287,15 @@ class CodexAgentView extends ItemView {
   private renderComposer(container: Element) {
     const composer = container.createDiv("codex-agent-composer");
     const inputBox = composer.createDiv("codex-agent-input-box");
-    const promptLine = inputBox.createDiv("codex-agent-prompt-line");
-    this.contextContainer = promptLine.createDiv("codex-agent-context-inline");
-    this.renderContextChips();
-
-    this.promptInput = promptLine.createDiv({
-      cls: "codex-agent-prompt-input",
+    this.promptInput = inputBox.createDiv({
+      cls: "codex-agent-prompt-editor is-empty",
       attr: {
         contenteditable: "true",
         "data-placeholder": "Ask Codex to analyze, rewrite, organize, or prepare safe vault edits..."
       }
     });
+    this.promptInput.addEventListener("input", () => this.updatePromptEmptyState());
+    this.promptInput.addEventListener("focus", () => this.updatePromptEmptyState());
 
     const footer = inputBox.createDiv("codex-agent-composer-footer");
     const controls = footer.createDiv("codex-agent-composer-controls");
@@ -389,7 +350,117 @@ class CodexAgentView extends ItemView {
       chip,
       ...this.contextChips.filter((item) => item.id !== chip.id)
     ];
-    this.renderContextChips();
+    this.insertOrUpdateChip(chip);
+  }
+
+  private insertOrUpdateChip(chip: ContextChip) {
+    if (!this.promptInput) {
+      return;
+    }
+
+    if (chip.kind === "selection") {
+      const count = this.contextChips.filter((item) => item.kind === "selection").length;
+      const existing = this.promptInput.querySelector<HTMLElement>("[data-context-kind='selection']");
+      if (existing) {
+        existing.querySelector(".codex-agent-chip-label")?.setText(`${count}个已选文本片段`);
+        return;
+      }
+      this.insertChipElement({
+        id: "selection-summary",
+        kind: "selection",
+        label: `${count}个已选文本片段`
+      });
+      return;
+    }
+
+    const existing = this.promptInput.querySelector(`[data-context-id='${CSS.escape(chip.id)}']`);
+    if (existing) {
+      return;
+    }
+
+    this.insertChipElement(chip);
+  }
+
+  private insertChipElement(chip: Pick<ContextChip, "id" | "kind" | "label">) {
+    if (!this.promptInput) {
+      return;
+    }
+
+    const chipEl = document.createElement("span");
+    chipEl.addClass("codex-agent-chip", `is-${chip.kind}`);
+    chipEl.setAttr("contenteditable", "false");
+    chipEl.setAttr("data-context-id", chip.id);
+    chipEl.setAttr("data-context-kind", chip.kind);
+    chipEl.createSpan({
+      cls: `codex-agent-chip-icon is-${chip.kind}`,
+      text: chip.kind === "folder" ? "▣" : chip.kind === "file" ? "◉" : "∞"
+    });
+    chipEl.createSpan({ cls: "codex-agent-chip-label", text: chip.label });
+    const remove = chipEl.createEl("button", {
+      text: "×",
+      attr: {
+        type: "button",
+        "aria-label": `Remove ${chip.label}`
+      }
+    });
+    remove.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (chip.kind === "selection") {
+        this.contextChips = this.contextChips.filter((item) => item.kind !== "selection");
+      } else {
+        this.contextChips = this.contextChips.filter((item) => item.id !== chip.id);
+      }
+      chipEl.remove();
+      this.updatePromptEmptyState();
+    });
+
+    this.insertNodeAtPromptCaret(chipEl);
+    this.updatePromptEmptyState();
+  }
+
+  private insertNodeAtPromptCaret(node: HTMLElement) {
+    if (!this.promptInput) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    const hasPromptSelection = selection
+      && selection.rangeCount > 0
+      && this.promptInput.contains(selection.getRangeAt(0).commonAncestorContainer);
+
+    const range = hasPromptSelection
+      ? selection!.getRangeAt(0)
+      : document.createRange();
+
+    if (!hasPromptSelection) {
+      range.selectNodeContents(this.promptInput);
+      range.collapse(false);
+    }
+
+    const fragment = document.createDocumentFragment();
+    const before = document.createTextNode(" ");
+    const after = document.createTextNode(" ");
+    fragment.append(before, node, after);
+
+    range.deleteContents();
+    range.insertNode(fragment);
+    range.setStartAfter(after);
+    range.collapse(true);
+
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    this.promptInput.focus();
+  }
+
+  private updatePromptEmptyState() {
+    if (!this.promptInput) {
+      return;
+    }
+
+    const hasText = this.promptInput.innerText.trim().length > 0;
+    const hasChip = Boolean(this.promptInput.querySelector(".codex-agent-chip"));
+    this.promptInput.toggleClass("is-empty", !hasText && !hasChip);
   }
 
   private runDemo() {
