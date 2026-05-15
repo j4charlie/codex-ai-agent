@@ -7,6 +7,7 @@ const {
   TFile,
   TFolder
 } = require("obsidian");
+const { spawn } = require("child_process");
 
 const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 
@@ -193,6 +194,8 @@ class CodexAgentView extends ItemView {
     this.modeButton = null;
     this.modelButton = null;
     this.speedButton = null;
+    this.runButton = null;
+    this.runningProcess = null;
   }
 
   getViewType() {
@@ -275,8 +278,8 @@ class CodexAgentView extends ItemView {
     this.speedButton = controls.createEl("button", { cls: "codex-agent-select-button", text: `${this.reasoningLevel} · ${this.speedChoice}` });
     this.speedButton.addEventListener("click", (event) => this.openReasoningMenu(event));
 
-    const runButton = footer.createEl("button", { cls: "mod-cta", text: "Run demo" });
-    runButton.addEventListener("click", () => this.runDemo());
+    this.runButton = footer.createEl("button", { cls: "mod-cta", text: "Run Codex" });
+    this.runButton.addEventListener("click", () => this.runCodex());
   }
 
   openModeMenu(event) {
@@ -506,10 +509,22 @@ class CodexAgentView extends ItemView {
     this.promptInput.toggleClass("is-empty", !hasText && !hasChip);
   }
 
-  runDemo() {
-    const prompt = this.promptInput?.innerText.trim();
+  async runCodex() {
+    if (this.runningProcess) {
+      this.runningProcess.kill();
+      this.runningProcess = null;
+      this.runButton?.setText("Run Codex");
+      this.appendTimelineItem({
+        title: "Stopped",
+        body: "Codex process was stopped by the user.",
+        tone: "command"
+      });
+      return;
+    }
+
+    const prompt = this.getPromptText();
     const target = prompt || "整理当前笔记，并给出可审查的修改建议";
-    const payload = this.buildDemoPayload(target);
+    const payload = await this.buildCodexPayload(target);
     const attached = payload.context.length;
     const summary = payload.context.length > 0
       ? payload.context.map((item) => {
@@ -522,45 +537,271 @@ class CodexAgentView extends ItemView {
 
     this.timeline = [
       {
-        title: "Plan",
-        body: `${this.mode === "ask" ? "Ask mode will stay read-only" : "Agent mode will prepare reviewable changes"} with ${this.modelChoice}, ${this.reasoningLevel} reasoning, ${this.speedChoice} speed for: ${target}`,
+        title: "Starting Codex",
+        body: `${this.mode === "ask" ? "Ask mode is read-only" : "Agent mode is running in read-only sandbox for this compatibility test"} with ${this.modelChoice}, ${this.reasoningLevel} reasoning, ${this.speedChoice} speed.`,
         tone: "thinking"
       },
       {
         title: "Read context",
         body: `Prepared ${attached} structured context item${attached === 1 ? "" : "s"}: ${summary}.`,
         tone: "tool"
-      },
-      {
-        title: "Proposed diff",
-        body: "Prepared a Markdown structure pass: tighten headings, extract action items, and preserve original wording where meaning is unclear.",
-        tone: "diff"
-      },
-      {
-        title: "Command approval",
-        body: "Would run: codex --ask-for-approval on-request. Waiting for user confirmation before any terminal action.",
-        tone: "command"
-      },
-      {
-        title: "Ready for review",
-        body: "Demo complete. Next implementation step is wiring this transcript to real Codex CLI events.",
-        tone: "done"
       }
     ];
 
     this.renderTimelineItems();
+
+    const vaultPath = this.app.vault.adapter.getBasePath();
+    const args = [
+      "exec",
+      "--json",
+      "--color",
+      "never",
+      "--sandbox",
+      "read-only",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "-C",
+      vaultPath,
+      "-m",
+      this.toCodexModel(this.modelChoice),
+      "-"
+    ];
+
+    const child = spawn("codex", args, {
+      cwd: vaultPath,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+
+    this.runningProcess = child;
+    this.runButton?.setText("Stop");
+
+    child.stdin.write(this.composeCodexPrompt(payload));
+    child.stdin.end();
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() ?? "";
+      lines.forEach((line) => this.handleCodexLine(line, "stdout"));
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderrBuffer += chunk.toString();
+      const lines = stderrBuffer.split(/\r?\n/);
+      stderrBuffer = lines.pop() ?? "";
+      lines.forEach((line) => this.handleCodexLine(line, "stderr"));
+    });
+
+    child.on("error", (error) => {
+      this.appendTimelineItem({
+        title: "Codex failed to start",
+        body: error.message,
+        tone: "command"
+      });
+    });
+
+    child.on("close", (code) => {
+      if (stdoutBuffer.trim()) {
+        this.handleCodexLine(stdoutBuffer, "stdout");
+      }
+      if (stderrBuffer.trim()) {
+        this.handleCodexLine(stderrBuffer, "stderr");
+      }
+
+      this.runningProcess = null;
+      this.runButton?.setText("Run Codex");
+      this.appendTimelineItem({
+        title: "Codex exited",
+        body: `Process exited with code ${code ?? "unknown"}.`,
+        tone: code === 0 ? "done" : "command"
+      });
+    });
   }
 
-  buildDemoPayload(prompt) {
+  getPromptText() {
+    if (!this.promptInput) {
+      return "";
+    }
+
+    const clone = this.promptInput.cloneNode(true);
+    clone.querySelectorAll(".codex-agent-chip").forEach((node) => node.remove());
+    return clone.innerText.trim();
+  }
+
+  async buildCodexPayload(prompt) {
     return {
       prompt,
-      context: this.contextChips.map((chip) => ({
-        id: chip.id,
-        kind: chip.kind,
-        label: chip.label,
-        path: chip.path,
-        text: chip.kind === "selection" ? chip.text : undefined
+      context: await Promise.all(this.contextChips.map(async (chip) => {
+        if (chip.kind === "file" && chip.path) {
+          const file = this.app.vault.getAbstractFileByPath(chip.path);
+          return {
+            id: chip.id,
+            kind: chip.kind,
+            label: chip.label,
+            path: chip.path,
+            text: file instanceof TFile ? await this.app.vault.cachedRead(file) : undefined
+          };
+        }
+
+        if (chip.kind === "folder" && chip.path) {
+          const folder = this.app.vault.getAbstractFileByPath(chip.path);
+          return {
+            id: chip.id,
+            kind: chip.kind,
+            label: chip.label,
+            path: chip.path,
+            tree: folder instanceof TFolder ? this.buildFolderTree(folder) : ""
+          };
+        }
+
+        return {
+          id: chip.id,
+          kind: chip.kind,
+          label: chip.label,
+          path: chip.path,
+          text: chip.text
+        };
       }))
     };
+  }
+
+  buildFolderTree(folder, depth = 0) {
+    if (depth > 3) {
+      return "";
+    }
+
+    return folder.children
+      .slice()
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .map((child) => {
+        const prefix = "  ".repeat(depth);
+        if (child instanceof TFolder) {
+          const nested = this.buildFolderTree(child, depth + 1);
+          return `${prefix}${child.path}/\n${nested}`;
+        }
+        return `${prefix}${child.path}`;
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  composeCodexPrompt(payload) {
+    const contextBlocks = payload.context.map((item) => {
+      if (item.kind === "selection") {
+        return `[Selection from ${item.path ?? "active editor"}]\n${item.text ?? ""}`;
+      }
+      if (item.kind === "file") {
+        return `[File: ${item.path}]\n${item.text ?? ""}`;
+      }
+      return `[Folder tree: ${item.path}]\n${item.tree ?? ""}`;
+    }).join("\n\n");
+
+    return [
+      "You are running inside an Obsidian plugin compatibility test.",
+      "Do not modify files. Do not run shell commands unless explicitly necessary.",
+      `Mode: ${this.mode}`,
+      `Reasoning: ${this.reasoningLevel}`,
+      `Speed: ${this.speedChoice}`,
+      "",
+      "User request:",
+      payload.prompt,
+      "",
+      "Attached context:",
+      contextBlocks || "(none)"
+    ].join("\n");
+  }
+
+  handleCodexLine(line, stream) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    if (!trimmed.startsWith("{")) {
+      this.appendTimelineItem({
+        title: stream === "stderr" ? "Codex stderr" : "Codex log",
+        body: trimmed.length > 500 ? `${trimmed.slice(0, 500)}...` : trimmed,
+        tone: "command"
+      });
+      return;
+    }
+
+    try {
+      const event = JSON.parse(trimmed);
+      this.appendTimelineItem(this.mapCodexEvent(event));
+    } catch {
+      this.appendTimelineItem({
+        title: "Unparsed Codex output",
+        body: trimmed,
+        tone: "command"
+      });
+    }
+  }
+
+  mapCodexEvent(event) {
+    if (event.type === "thread.started") {
+      return {
+        title: "Thread started",
+        body: event.thread_id ?? "New Codex thread started.",
+        tone: "thinking"
+      };
+    }
+
+    if (event.type === "turn.started") {
+      return {
+        title: "Turn started",
+        body: "Codex started processing the request.",
+        tone: "thinking"
+      };
+    }
+
+    if (event.type === "item.completed") {
+      const item = event.item ?? {};
+      if (item.type === "agent_message") {
+        return {
+          title: "Codex response",
+          body: item.text ?? "",
+          tone: "done"
+        };
+      }
+      return {
+        title: `Codex item: ${item.type ?? "unknown"}`,
+        body: JSON.stringify(item).slice(0, 700),
+        tone: item.type?.includes("command") ? "command" : "tool"
+      };
+    }
+
+    if (event.type === "turn.completed") {
+      const usage = event.usage;
+      return {
+        title: "Turn completed",
+        body: usage ? `input ${usage.input_tokens}, cached ${usage.cached_input_tokens}, output ${usage.output_tokens}, reasoning ${usage.reasoning_output_tokens}` : "Codex turn completed.",
+        tone: "done"
+      };
+    }
+
+    return {
+      title: `Codex event: ${event.type ?? "unknown"}`,
+      body: JSON.stringify(event).slice(0, 700),
+      tone: "tool"
+    };
+  }
+
+  appendTimelineItem(item) {
+    this.timeline = [...this.timeline, item];
+    this.renderTimelineItems();
+  }
+
+  toCodexModel(model) {
+    const mapping = {
+      "GPT-5.5": "gpt-5.5",
+      "GPT-5.4": "gpt-5.4",
+      "GPT-5.4 Mini": "gpt-5.4-mini",
+      "GPT-5.3 Codex": "gpt-5.3-codex"
+    };
+    return mapping[model];
   }
 }
