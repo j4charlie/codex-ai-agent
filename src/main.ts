@@ -50,6 +50,12 @@ interface AgentSession {
   closedAt?: number;
 }
 
+interface AgentPluginData {
+  sessions: AgentSession[];
+  archivedSessions: AgentSession[];
+  activeSessionId: string;
+}
+
 type AgentRuntimeState = "idle" | "thinking" | "running" | "done" | "error";
 
 type AgentEvent =
@@ -247,11 +253,18 @@ class PtyCodexAdapter implements CodexAdapter {
 
 export default class CodexForObsidianPlugin extends Plugin {
   private selectionButtonEl: HTMLElement | null = null;
+  private agentData: AgentPluginData = {
+    sessions: [],
+    archivedSessions: [],
+    activeSessionId: ""
+  };
 
   async onload() {
+    this.agentData = this.normalizeAgentData(await this.loadData());
+
     this.registerView(
       VIEW_TYPE_CODEX_AGENT,
-      (leaf) => new CodexAgentView(leaf)
+      (leaf) => new CodexAgentView(leaf, this)
     );
 
     this.addRibbonIcon("bot", "Open Codex Agent", () => {
@@ -338,6 +351,59 @@ export default class CodexForObsidianPlugin extends Plugin {
   async onunload() {
     this.hideSelectionAddButton();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CODEX_AGENT);
+  }
+
+  getAgentData(): AgentPluginData {
+    return {
+      sessions: this.agentData.sessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      archivedSessions: this.agentData.archivedSessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      activeSessionId: this.agentData.activeSessionId
+    };
+  }
+
+  saveAgentData(sessions: AgentSession[], archivedSessions: AgentSession[], activeSessionId: string) {
+    this.agentData = {
+      sessions: sessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      archivedSessions: archivedSessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      activeSessionId
+    };
+    void this.saveData(this.agentData);
+  }
+
+  private normalizeAgentData(data: any): AgentPluginData {
+    const sessions = Array.isArray(data?.sessions)
+      ? data.sessions.map((session: any) => this.normalizeSession(session)).filter(Boolean) as AgentSession[]
+      : [];
+    const archivedSessions = Array.isArray(data?.archivedSessions)
+      ? data.archivedSessions.map((session: any) => this.normalizeSession(session)).filter(Boolean) as AgentSession[]
+      : [];
+    const activeSessionId = typeof data?.activeSessionId === "string" ? data.activeSessionId : "";
+    return { sessions, archivedSessions, activeSessionId };
+  }
+
+  private normalizeSession(session: any): AgentSession | null {
+    if (!session || typeof session.id !== "string") {
+      return null;
+    }
+    const now = Date.now();
+    return {
+      id: session.id,
+      title: typeof session.title === "string" ? session.title : "New Agent",
+      timeline: Array.isArray(session.timeline)
+        ? session.timeline
+          .filter((item: any) => typeof item?.title === "string" && typeof item?.body === "string")
+          .map((item: any) => ({
+            title: item.title,
+            body: item.body,
+            tone: ["status", "command", "response"].includes(item.tone) ? item.tone : "status"
+          }))
+        : [],
+      statusItemIndex: typeof session.statusItemIndex === "number" ? session.statusItemIndex : null,
+      runStartedAt: typeof session.runStartedAt === "number" ? session.runStartedAt : 0,
+      createdAt: typeof session.createdAt === "number" ? session.createdAt : now,
+      updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : now,
+      closedAt: typeof session.closedAt === "number" ? session.closedAt : undefined
+    };
   }
 
   private async activateView(): Promise<CodexAgentView | null> {
@@ -431,11 +497,14 @@ class CodexAgentView extends ItemView {
   private liveStatusTextEl: HTMLElement | null = null;
   private elapsedTimer: number | null = null;
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(leaf: WorkspaceLeaf, private owner: CodexForObsidianPlugin) {
     super(leaf);
-    const session = this.createSession();
-    this.sessions = [session];
-    this.activeSessionId = session.id;
+    const saved = this.owner.getAgentData();
+    this.sessions = saved.sessions.length > 0 ? saved.sessions : [this.createSession()];
+    this.archivedSessions = saved.archivedSessions;
+    this.activeSessionId = this.sessions.some((session) => session.id === saved.activeSessionId)
+      ? saved.activeSessionId
+      : this.sessions[0].id;
   }
 
   getViewType(): string {
@@ -453,6 +522,8 @@ class CodexAgentView extends ItemView {
       this.runningProcess.cancel();
       this.runningProcess = null;
     }
+    this.runningSessionId = null;
+    this.persistSessions();
   }
 
   async onOpen() {
@@ -486,6 +557,7 @@ class CodexAgentView extends ItemView {
 
       tab.addEventListener("click", () => {
         this.activeSessionId = session.id;
+        this.persistSessions();
         this.renderSessionTabs();
         this.renderTimelineItems();
       });
@@ -597,6 +669,7 @@ class CodexAgentView extends ItemView {
       this.sessions = [...this.sessions, archived];
     }
     this.activeSessionId = sessionId;
+    this.persistSessions();
   }
 
   private renderTimeline(container: Element) {
@@ -942,6 +1015,7 @@ class CodexAgentView extends ItemView {
     session.runStartedAt = Date.now();
     this.runningSessionId = session.id;
     this.isCancellingRun = false;
+    this.persistSessions();
     this.renderSessionTabs();
     this.startElapsedTimer();
 
@@ -1142,6 +1216,7 @@ class CodexAgentView extends ItemView {
       this.runningSessionId = null;
       this.runButton?.setText("↑");
       this.stopElapsedTimer();
+      this.persistSessions();
       return;
     }
 
@@ -1159,6 +1234,7 @@ class CodexAgentView extends ItemView {
     } else {
       this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
     }
+    this.persistSessions();
   }
 
   private formatStatusTitle(event: Extract<AgentEvent, { type: "status" }>) {
@@ -1188,6 +1264,7 @@ class CodexAgentView extends ItemView {
     const session = this.getTargetSession();
     session.timeline = [...session.timeline, item];
     session.updatedAt = Date.now();
+    this.persistSessions();
     if (session.id === this.activeSessionId) {
       this.renderTimelineItems();
     }
@@ -1266,6 +1343,7 @@ class CodexAgentView extends ItemView {
     const session = this.createSession();
     this.sessions = [...this.sessions, session];
     this.activeSessionId = session.id;
+    this.persistSessions();
     this.renderSessionTabs();
     this.renderTimelineItems();
   }
@@ -1298,8 +1376,13 @@ class CodexAgentView extends ItemView {
     if (!this.sessions.some((session) => session.id === this.activeSessionId)) {
       this.activeSessionId = this.sessions[0].id;
     }
+    this.persistSessions();
     this.renderSessionTabs();
     this.renderTimelineItems();
+  }
+
+  private persistSessions() {
+    this.owner.saveAgentData(this.sessions, this.archivedSessions, this.activeSessionId);
   }
 
   private getActiveSession() {

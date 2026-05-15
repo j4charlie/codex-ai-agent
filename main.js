@@ -176,12 +176,19 @@ module.exports = class CodexForObsidianPlugin extends Plugin {
   constructor(app, manifest) {
     super(app, manifest);
     this.selectionButtonEl = null;
+    this.agentData = {
+      sessions: [],
+      archivedSessions: [],
+      activeSessionId: ""
+    };
   }
 
   async onload() {
+    this.agentData = this.normalizeAgentData(await this.loadData());
+
     this.registerView(
       VIEW_TYPE_CODEX_AGENT,
-      (leaf) => new CodexAgentView(leaf)
+      (leaf) => new CodexAgentView(leaf, this)
     );
 
     this.addRibbonIcon("bot", "Open Codex Agent", () => {
@@ -270,6 +277,59 @@ module.exports = class CodexForObsidianPlugin extends Plugin {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CODEX_AGENT);
   }
 
+  getAgentData() {
+    return {
+      sessions: this.agentData.sessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      archivedSessions: this.agentData.archivedSessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      activeSessionId: this.agentData.activeSessionId
+    };
+  }
+
+  saveAgentData(sessions, archivedSessions, activeSessionId) {
+    this.agentData = {
+      sessions: sessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      archivedSessions: archivedSessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
+      activeSessionId
+    };
+    void this.saveData(this.agentData);
+  }
+
+  normalizeAgentData(data) {
+    const sessions = Array.isArray(data?.sessions)
+      ? data.sessions.map((session) => this.normalizeSession(session)).filter(Boolean)
+      : [];
+    const archivedSessions = Array.isArray(data?.archivedSessions)
+      ? data.archivedSessions.map((session) => this.normalizeSession(session)).filter(Boolean)
+      : [];
+    const activeSessionId = typeof data?.activeSessionId === "string" ? data.activeSessionId : "";
+    return { sessions, archivedSessions, activeSessionId };
+  }
+
+  normalizeSession(session) {
+    if (!session || typeof session.id !== "string") {
+      return null;
+    }
+    const now = Date.now();
+    return {
+      id: session.id,
+      title: typeof session.title === "string" ? session.title : "New Agent",
+      timeline: Array.isArray(session.timeline)
+        ? session.timeline
+          .filter((item) => typeof item?.title === "string" && typeof item?.body === "string")
+          .map((item) => ({
+            title: item.title,
+            body: item.body,
+            tone: ["status", "command", "response"].includes(item.tone) ? item.tone : "status"
+          }))
+        : [],
+      statusItemIndex: typeof session.statusItemIndex === "number" ? session.statusItemIndex : null,
+      runStartedAt: typeof session.runStartedAt === "number" ? session.runStartedAt : 0,
+      createdAt: typeof session.createdAt === "number" ? session.createdAt : now,
+      updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : now,
+      closedAt: typeof session.closedAt === "number" ? session.closedAt : undefined
+    };
+  }
+
   async activateView() {
     const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_CODEX_AGENT)[0];
 
@@ -336,8 +396,9 @@ module.exports = class CodexForObsidianPlugin extends Plugin {
 };
 
 class CodexAgentView extends ItemView {
-  constructor(leaf) {
+  constructor(leaf, owner) {
     super(leaf);
+    this.owner = owner;
     this.mode = "agent";
     this.adapterMode = "exec-json";
     this.contextChips = [];
@@ -362,9 +423,12 @@ class CodexAgentView extends ItemView {
     this.liveStatusEl = null;
     this.liveStatusTextEl = null;
     this.elapsedTimer = null;
-    const session = this.createSession();
-    this.sessions = [session];
-    this.activeSessionId = session.id;
+    const saved = this.owner.getAgentData();
+    this.sessions = saved.sessions.length > 0 ? saved.sessions : [this.createSession()];
+    this.archivedSessions = saved.archivedSessions;
+    this.activeSessionId = this.sessions.some((session) => session.id === saved.activeSessionId)
+      ? saved.activeSessionId
+      : this.sessions[0].id;
   }
 
   getViewType() {
@@ -382,6 +446,8 @@ class CodexAgentView extends ItemView {
       this.runningProcess.cancel();
       this.runningProcess = null;
     }
+    this.runningSessionId = null;
+    this.persistSessions();
   }
 
   async onOpen() {
@@ -415,6 +481,7 @@ class CodexAgentView extends ItemView {
 
       tab.addEventListener("click", () => {
         this.activeSessionId = session.id;
+        this.persistSessions();
         this.renderSessionTabs();
         this.renderTimelineItems();
       });
@@ -526,6 +593,7 @@ class CodexAgentView extends ItemView {
       this.sessions = [...this.sessions, archived];
     }
     this.activeSessionId = sessionId;
+    this.persistSessions();
   }
 
   renderTimeline(container) {
@@ -874,6 +942,7 @@ class CodexAgentView extends ItemView {
     session.runStartedAt = Date.now();
     this.runningSessionId = session.id;
     this.isCancellingRun = false;
+    this.persistSessions();
     this.renderSessionTabs();
     this.startElapsedTimer();
 
@@ -1074,6 +1143,7 @@ class CodexAgentView extends ItemView {
       this.runningSessionId = null;
       this.runButton?.setText("↑");
       this.stopElapsedTimer();
+      this.persistSessions();
       return;
     }
 
@@ -1091,6 +1161,7 @@ class CodexAgentView extends ItemView {
     } else {
       this.updateTranscriptStatus(`已处理 ${this.getElapsedLabel()}`, "");
     }
+    this.persistSessions();
   }
 
   formatStatusTitle(event) {
@@ -1110,6 +1181,7 @@ class CodexAgentView extends ItemView {
     const session = this.getTargetSession();
     session.timeline = [...session.timeline, item];
     session.updatedAt = Date.now();
+    this.persistSessions();
     if (session.id === this.activeSessionId) {
       this.renderTimelineItems();
     }
@@ -1198,6 +1270,7 @@ class CodexAgentView extends ItemView {
     const session = this.createSession();
     this.sessions = [...this.sessions, session];
     this.activeSessionId = session.id;
+    this.persistSessions();
     this.renderSessionTabs();
     this.renderTimelineItems();
   }
@@ -1230,8 +1303,13 @@ class CodexAgentView extends ItemView {
     if (!this.sessions.some((session) => session.id === this.activeSessionId)) {
       this.activeSessionId = this.sessions[0].id;
     }
+    this.persistSessions();
     this.renderSessionTabs();
     this.renderTimelineItems();
+  }
+
+  persistSessions() {
+    this.owner.saveAgentData(this.sessions, this.archivedSessions, this.activeSessionId);
   }
 
   getActiveSession() {
