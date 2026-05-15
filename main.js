@@ -275,6 +275,7 @@ class CodexAgentView extends ItemView {
     });
     this.promptInput.addEventListener("input", () => this.updatePromptEmptyState());
     this.promptInput.addEventListener("focus", () => this.updatePromptEmptyState());
+    this.promptInput.addEventListener("keydown", (event) => this.handlePromptKeydown(event));
 
     const footer = inputBox.createDiv("codex-agent-composer-footer");
     const controls = footer.createDiv("codex-agent-composer-controls");
@@ -519,6 +520,17 @@ class CodexAgentView extends ItemView {
     const hasText = this.promptInput.innerText.trim().length > 0;
     const hasChip = Boolean(this.promptInput.querySelector(".codex-agent-chip"));
     this.promptInput.toggleClass("is-empty", !hasText && !hasChip);
+  }
+
+  handlePromptKeydown(event) {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    if (!this.runningProcess) {
+      this.runCodex();
+    }
   }
 
   async runCodex() {
