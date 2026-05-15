@@ -184,8 +184,11 @@ class CodexAgentView extends ItemView {
     this.reasoningLevel = "中";
     this.modelChoice = "GPT-5.5";
     this.speedChoice = "标准";
-    this.timeline = [];
+    this.sessions = [];
+    this.activeSessionId = "";
+    this.runningSessionId = null;
     this.promptInput = null;
+    this.tabContainer = null;
     this.timelineContainer = null;
     this.workbenchContainer = null;
     this.modeButton = null;
@@ -195,9 +198,10 @@ class CodexAgentView extends ItemView {
     this.runningProcess = null;
     this.liveStatusEl = null;
     this.liveStatusTextEl = null;
-    this.runStartedAt = 0;
-    this.statusItemIndex = null;
     this.elapsedTimer = null;
+    const session = this.createSession();
+    this.sessions = [session];
+    this.activeSessionId = session.id;
   }
 
   getViewType() {
@@ -222,6 +226,7 @@ class CodexAgentView extends ItemView {
     container.addClass("codex-agent-panel");
 
     this.renderHeader(container);
+    this.renderTabs(container);
     this.renderTimeline(container);
     this.renderComposer(container);
   }
@@ -237,6 +242,42 @@ class CodexAgentView extends ItemView {
     status.createSpan({ text: "CLI ready" });
   }
 
+  renderTabs(container) {
+    this.tabContainer = container.createDiv("codex-agent-tabbar");
+    this.renderSessionTabs();
+  }
+
+  renderSessionTabs() {
+    if (!this.tabContainer) {
+      return;
+    }
+
+    this.tabContainer.empty();
+    this.sessions.forEach((session) => {
+      const tab = this.tabContainer.createEl("button", {
+        cls: `codex-agent-tab ${session.id === this.activeSessionId ? "is-active" : ""}`
+      });
+      tab.createSpan({ cls: "codex-agent-tab-icon", text: "▱" });
+      tab.createSpan({ cls: "codex-agent-tab-title", text: session.title });
+      const close = tab.createSpan({ cls: "codex-agent-tab-close", text: "×" });
+
+      tab.addEventListener("click", () => {
+        this.activeSessionId = session.id;
+        this.renderSessionTabs();
+        this.renderTimelineItems();
+      });
+
+      close.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeSession(session.id);
+      });
+    });
+
+    const add = this.tabContainer.createEl("button", { cls: "codex-agent-tab-add", text: "+" });
+    add.addEventListener("click", () => this.addSession());
+  }
+
   renderTimeline(container) {
     const section = container.createDiv("codex-agent-workbench");
     this.workbenchContainer = section;
@@ -249,8 +290,9 @@ class CodexAgentView extends ItemView {
       return;
     }
 
+    const session = this.getActiveSession();
     this.timelineContainer.empty();
-    this.timeline.forEach((item) => {
+    session.timeline.forEach((item) => {
       const row = this.timelineContainer.createDiv(`codex-agent-event is-${item.tone}`);
       row.createDiv("codex-agent-event-marker");
       const content = row.createDiv("codex-agent-event-content");
@@ -549,6 +591,7 @@ class CodexAgentView extends ItemView {
         body: "Codex process was stopped by the user.",
         tone: "command"
       });
+      this.runningSessionId = null;
       return;
     }
 
@@ -565,15 +608,19 @@ class CodexAgentView extends ItemView {
       }).join("; ")
       : "no attached context";
 
-    this.timeline = [
+    const session = this.getActiveSession();
+    session.title = this.makeSessionTitle(target);
+    session.timeline = [
       {
         title: "正在思考",
         body: attached > 0 ? `已读取 ${attached} 个上下文：${summary}` : "未添加上下文",
         tone: "status"
       }
     ];
-    this.statusItemIndex = 0;
-    this.runStartedAt = Date.now();
+    session.statusItemIndex = 0;
+    session.runStartedAt = Date.now();
+    this.runningSessionId = session.id;
+    this.renderSessionTabs();
     this.startElapsedTimer();
 
     this.renderTimelineItems();
@@ -645,6 +692,7 @@ class CodexAgentView extends ItemView {
       }
 
       this.runningProcess = null;
+      this.runningSessionId = null;
       this.runButton?.setText("Run Codex");
       this.stopElapsedTimer();
       this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "已完成" : "运行失败");
@@ -851,27 +899,34 @@ class CodexAgentView extends ItemView {
   }
 
   appendTimelineItem(item) {
-    this.timeline = [...this.timeline, item];
-    this.renderTimelineItems();
+    const session = this.getTargetSession();
+    session.timeline = [...session.timeline, item];
+    if (session.id === this.activeSessionId) {
+      this.renderTimelineItems();
+    }
   }
 
   updateTranscriptStatus(title, body = "") {
     const item = { title, body, tone: "status" };
-    if (this.statusItemIndex === null || !this.timeline[this.statusItemIndex]) {
-      this.timeline = [...this.timeline, item];
-      this.statusItemIndex = this.timeline.length - 1;
+    const session = this.getTargetSession();
+    if (session.statusItemIndex === null || !session.timeline[session.statusItemIndex]) {
+      session.timeline = [...session.timeline, item];
+      session.statusItemIndex = session.timeline.length - 1;
     } else {
-      this.timeline[this.statusItemIndex] = item;
+      session.timeline[session.statusItemIndex] = item;
     }
-    this.renderTimelineItems();
+    if (session.id === this.activeSessionId) {
+      this.renderTimelineItems();
+    }
   }
 
   getElapsedLabel() {
-    if (!this.runStartedAt) {
+    const session = this.getTargetSession();
+    if (!session.runStartedAt) {
       return "0s";
     }
 
-    const totalSeconds = Math.max(0, Math.round((Date.now() - this.runStartedAt) / 1000));
+    const totalSeconds = Math.max(0, Math.round((Date.now() - session.runStartedAt) / 1000));
     if (totalSeconds < 60) {
       return `${totalSeconds}s`;
     }
@@ -914,5 +969,60 @@ class CodexAgentView extends ItemView {
       "GPT-5.3 Codex": "gpt-5.3-codex"
     };
     return mapping[model];
+  }
+
+  createSession(title = "New Agent") {
+    return {
+      id: `session-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      title,
+      timeline: [],
+      statusItemIndex: null,
+      runStartedAt: 0
+    };
+  }
+
+  addSession() {
+    const session = this.createSession();
+    this.sessions = [...this.sessions, session];
+    this.activeSessionId = session.id;
+    this.renderSessionTabs();
+    this.renderTimelineItems();
+  }
+
+  closeSession(sessionId) {
+    if (this.runningSessionId === sessionId && this.runningProcess) {
+      this.runningProcess.kill();
+      this.runningProcess = null;
+      this.runningSessionId = null;
+      this.stopElapsedTimer();
+      this.runButton?.setText("Run Codex");
+    }
+
+    this.sessions = this.sessions.filter((session) => session.id !== sessionId);
+    if (this.sessions.length === 0) {
+      this.sessions = [this.createSession()];
+    }
+    if (!this.sessions.some((session) => session.id === this.activeSessionId)) {
+      this.activeSessionId = this.sessions[0].id;
+    }
+    this.renderSessionTabs();
+    this.renderTimelineItems();
+  }
+
+  getActiveSession() {
+    return this.sessions.find((session) => session.id === this.activeSessionId) ?? this.sessions[0];
+  }
+
+  getTargetSession() {
+    return this.sessions.find((session) => session.id === this.runningSessionId)
+      ?? this.getActiveSession();
+  }
+
+  makeSessionTitle(prompt) {
+    const compact = prompt.replace(/\s+/g, " ").trim();
+    if (!compact) {
+      return "New Agent";
+    }
+    return compact.length > 22 ? `${compact.slice(0, 22)}...` : compact;
   }
 }
