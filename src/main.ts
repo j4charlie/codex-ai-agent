@@ -711,13 +711,14 @@ class CodexAgentView extends ItemView {
     this.renderTimelineItems();
 
     const vaultPath = (this.app.vault.adapter as any).getBasePath();
+    const sandboxMode = this.getCodexSandboxMode();
     const args = [
       "exec",
       "--json",
       "--color",
       "never",
       "--sandbox",
-      "read-only",
+      sandboxMode,
       "--ephemeral",
       "--skip-git-repo-check",
       "-C",
@@ -878,11 +879,15 @@ class CodexAgentView extends ItemView {
       }
       return `[Folder tree: ${item.path}]\n${item.tree ?? ""}`;
     }).join("\n\n");
+    const modeInstruction = this.mode === "agent"
+      ? "Agent mode: you may run necessary shell commands and edit files inside the current Obsidian vault workspace. Keep changes focused and reviewable."
+      : "Ask mode: do not modify files and do not run shell commands; analyze only and explain proposed changes.";
 
     return [
       "You are running inside an Obsidian plugin compatibility test.",
-      "Do not modify files. Do not run shell commands unless explicitly necessary.",
+      modeInstruction,
       `Mode: ${this.mode}`,
+      `Sandbox: ${this.getCodexSandboxMode()}`,
       `Reasoning: ${this.reasoningLevel}`,
       `Speed: ${this.speedChoice}`,
       "",
@@ -892,6 +897,10 @@ class CodexAgentView extends ItemView {
       "Attached context:",
       contextBlocks || "(none)"
     ].join("\n");
+  }
+
+  private getCodexSandboxMode() {
+    return this.mode === "agent" ? "workspace-write" : "read-only";
   }
 
   private handleCodexLine(line: string, stream: "stdout" | "stderr") {
