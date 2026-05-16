@@ -1,7 +1,7 @@
 {
   "id": "codex-ai-agent",
   "name": "Codex AI Agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.5.0",
   "description": "Run Codex CLI as a local AI agent with note context, approvals, and reviewable file changes.",
   "author": "j4charlie",
