@@ -8,6 +8,8 @@ Codex AI Agent is a local Codex-powered agent panel for Obsidian. It brings Code
 
 The plugin uses the official Codex integration path to provide an experience close to the native Codex agent: streaming responses, tool activity, multi-turn conversations, context attachments, diff review, and local history management.
 
+![Codex AI Agent panel](assets/plugin-user-interface.png)
+
 ## Key Capabilities
 
 - Add files or folders from the Obsidian file tree into the current conversation with a right-click action, and add selected note text directly into the agent context.

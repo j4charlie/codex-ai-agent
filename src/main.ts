@@ -1708,7 +1708,7 @@ class CodexAgentSettingTab extends PluginSettingTab {
       .addButton((button) => button
         .setButtonText("Check Codex")
         .setCta()
-        .onClick(() => this.checkCodex(settings.codexBin || DEFAULT_CODEX_BIN)))
+        .onClick(() => this.checkCodex(this.owner.getSettings().codexBin || DEFAULT_CODEX_BIN)))
       .addButton((button) => button
         .setButtonText("Try common locations")
         .onClick(() => this.tryCommonCodexLocations()))
@@ -3183,6 +3183,52 @@ class CodexAgentView extends ItemView {
     const hasPromptSelection = selection
       && selection.rangeCount > 0
       && this.promptInput.contains(selection.getRangeAt(0).commonAncestorContainer);
+    const hasPromptContent = this.stripPromptControlText(this.promptInput.innerText).trim().length > 0
+      || Boolean(this.promptInput.querySelector(".codex-agent-chip"));
+
+    if (!hasPromptContent) {
+      this.promptInput.empty();
+    }
+
+    const range = hasPromptSelection
+      ? selection!.getRangeAt(0)
+      : document.createRange();
+
+    if (!hasPromptSelection || !hasPromptContent) {
+      range.selectNodeContents(this.promptInput);
+      range.collapse(false);
+    }
+
+    const fragment = document.createDocumentFragment();
+    if (hasPromptContent) {
+      fragment.append(document.createTextNode(" "));
+    }
+    const after = document.createTextNode("\u200B");
+    fragment.append(node, after);
+
+    range.deleteContents();
+    range.insertNode(fragment);
+    range.setStartAfter(after);
+    range.collapse(true);
+
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    this.promptInput.focus();
+  }
+
+  private stripPromptControlText(text: string) {
+    return text.replace(/\u200B/g, "");
+  }
+
+  private insertPlainTextAtPromptCaret(text: string) {
+    if (!this.promptInput || !text) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    const hasPromptSelection = selection
+      && selection.rangeCount > 0
+      && this.promptInput.contains(selection.getRangeAt(0).commonAncestorContainer);
 
     const range = hasPromptSelection
       ? selection!.getRangeAt(0)
@@ -3193,19 +3239,114 @@ class CodexAgentView extends ItemView {
       range.collapse(false);
     }
 
-    const fragment = document.createDocumentFragment();
-    const before = document.createTextNode(" ");
-    const after = document.createTextNode(" ");
-    fragment.append(before, node, after);
-
+    const textNode = document.createTextNode(text);
     range.deleteContents();
-    range.insertNode(fragment);
-    range.setStartAfter(after);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
     range.collapse(true);
 
     selection?.removeAllRanges();
     selection?.addRange(range);
     this.promptInput.focus();
+  }
+
+  private getClipboardText(clipboardData: DataTransfer | null) {
+    if (!clipboardData) {
+      return "";
+    }
+
+    const html = clipboardData.getData("text/html");
+    const plainText = clipboardData.getData("text/plain");
+    if (!html.trim()) {
+      return plainText;
+    }
+
+    return this.convertClipboardHtmlToPlainText(html) || plainText;
+  }
+
+  private convertClipboardHtmlToPlainText(html: string) {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const rendered = this.renderClipboardNodeText(template.content, 0);
+    return rendered
+      .replace(/\u00a0/g, " ")
+      .split(/\r?\n/)
+      .map((line) => line.replace(/[ \t]+$/g, ""))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  private renderClipboardNodeText(node: Node, listDepth: number): string {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return (node.textContent ?? "").replace(/[ \t\r\n]+/g, " ");
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
+      return "";
+    }
+
+    const element = node instanceof HTMLElement ? node : null;
+    const tag = element?.tagName.toLowerCase() ?? "";
+    if (tag === "br") {
+      return "\n";
+    }
+    if (tag === "pre") {
+      return `${element?.textContent ?? ""}\n`;
+    }
+    if (tag === "ol" || tag === "ul") {
+      return this.renderClipboardListText(element!, tag, listDepth);
+    }
+
+    const childrenText = Array.from(node.childNodes)
+      .map((child) => this.renderClipboardNodeText(child, listDepth))
+      .join("");
+
+    if (["p", "div", "section", "article", "header", "footer", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"].includes(tag)) {
+      return `${childrenText.trim()}\n`;
+    }
+    if (tag === "tr") {
+      return `${childrenText.trim()}\n`;
+    }
+    if (tag === "td" || tag === "th") {
+      return `${childrenText.trim()}\t`;
+    }
+    return childrenText;
+  }
+
+  private renderClipboardListText(listEl: HTMLElement, tag: string, listDepth: number) {
+    const lines: string[] = [];
+    let index = Number(listEl.getAttr("start") ?? "1");
+    if (!Number.isFinite(index) || index < 1) {
+      index = 1;
+    }
+
+    Array.from(listEl.children).forEach((child) => {
+      if (!(child instanceof HTMLElement) || child.tagName.toLowerCase() !== "li") {
+        return;
+      }
+
+      const nestedLists = Array.from(child.children)
+        .filter((item): item is HTMLElement => item instanceof HTMLElement && ["ol", "ul"].includes(item.tagName.toLowerCase()));
+      const itemText = Array.from(child.childNodes)
+        .filter((item) => !(item instanceof HTMLElement && ["ol", "ul"].includes(item.tagName.toLowerCase())))
+        .map((item) => this.renderClipboardNodeText(item, listDepth))
+        .join("")
+        .trim();
+      const marker = tag === "ol" ? `${index}. ` : "- ";
+      const indent = "  ".repeat(listDepth);
+      if (itemText) {
+        lines.push(`${indent}${marker}${itemText}`);
+      }
+      nestedLists.forEach((nestedList) => {
+        const nestedText = this.renderClipboardNodeText(nestedList, listDepth + 1).trimEnd();
+        if (nestedText) {
+          lines.push(nestedText);
+        }
+      });
+      index += 1;
+    });
+
+    return `${lines.join("\n")}\n`;
   }
 
   private handlePromptPaste(event: ClipboardEvent) {
@@ -3222,12 +3363,17 @@ class CodexAgentView extends ItemView {
         }
       });
     const files = [...fileMap.values()];
-    if (files.length === 0) {
+    const plainText = this.getClipboardText(event.clipboardData);
+    if (files.length === 0 && !plainText) {
       return;
     }
     event.preventDefault();
+    if (plainText) {
+      this.insertPlainTextAtPromptCaret(plainText);
+    }
     files.forEach((file) => this.addImageContext(file));
     this.updatePromptEmptyState();
+    this.updatePromptPicker();
   }
 
   private updatePromptPicker() {
@@ -3516,7 +3662,7 @@ class CodexAgentView extends ItemView {
       return;
     }
 
-    const hasText = this.promptInput.innerText.trim().length > 0;
+    const hasText = this.stripPromptControlText(this.promptInput.innerText).trim().length > 0;
     const hasChip = Boolean(this.promptInput.querySelector(".codex-agent-chip"));
     const isEmpty = !hasText && !hasChip;
     this.promptInput.toggleClass("is-empty", isEmpty);
@@ -3525,7 +3671,7 @@ class CodexAgentView extends ItemView {
   }
 
   private hasPromptText() {
-    return Boolean(this.promptInput?.innerText.trim());
+    return Boolean(this.promptInput && this.stripPromptControlText(this.promptInput.innerText).trim());
   }
 
   private updateRunButtonDisabledState() {
@@ -3685,7 +3831,7 @@ class CodexAgentView extends ItemView {
 
     const clone = this.promptInput.cloneNode(true) as HTMLElement;
     clone.querySelectorAll(".codex-agent-chip").forEach((node) => node.remove());
-    return clone.innerText.trim();
+    return this.stripPromptControlText(clone.innerText).trim();
   }
 
   private clearComposer() {
