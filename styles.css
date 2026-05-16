@@ -73,7 +73,7 @@
   padding: 4px 10px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
-  color: var(--text-normal) !important;
+  color: var(--text-normal);
   text-decoration: none;
   background: var(--background-primary);
 }
@@ -657,11 +657,11 @@
   max-width: 100%;
   margin: 0;
   padding: 2px 0;
-  border: 0 !important;
-  border-radius: 0 !important;
+  border: 0;
+  border-radius: 0;
   color: var(--codex-muted);
-  background: transparent !important;
-  box-shadow: none !important;
+  background: transparent;
+  box-shadow: none;
   font-size: 12px;
   font-weight: 650;
   line-height: 1.4;
@@ -687,7 +687,7 @@
   margin: 8px 0 0;
   padding: 0 2px 0 22px;
   color: rgba(238, 241, 244, 0.66);
-  font-family: var(--font-monospace), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -907,7 +907,7 @@
 
 .codex-agent-approval-choice-number {
   color: var(--codex-muted);
-  font-family: var(--font-monospace), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 14px;
 }
 
@@ -930,7 +930,7 @@
 .codex-agent-approval-choice-detail {
   overflow: hidden;
   color: var(--codex-muted);
-  font-family: var(--font-monospace), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1000,7 +1000,7 @@
 .codex-agent-streaming-text {
   width: min(100%, 760px);
   min-height: 1.72em;
-  font-family: var(--font-monospace), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: var(--codex-chat-font-size);
   line-height: 1.72;
   white-space: pre-wrap;
@@ -1043,8 +1043,8 @@
 .codex-agent-markdown pre span,
 .codex-agent-approval-detail pre code,
 .codex-agent-approval-detail pre span {
-  background: transparent !important;
-  box-shadow: none !important;
+  background: transparent;
+  box-shadow: none;
 }
 
 .codex-agent-event.is-status .codex-agent-event-content p {
@@ -1099,18 +1099,18 @@
   appearance: none;
   -webkit-appearance: none;
   display: grid;
-  grid-template-columns: 30px max-content minmax(0, 1fr) max-content;
+  grid-template-columns: 30px minmax(0, 1fr) max-content;
   align-items: center;
-  column-gap: 12px;
+  gap: 12px;
   width: 100%;
   min-height: 46px;
   padding: 6px 12px;
-  border: 0 !important;
-  border-bottom: 1px solid var(--codex-line) !important;
-  border-radius: 0 !important;
+  border: 0;
+  border-bottom: 1px solid var(--codex-line);
+  border-radius: 0;
   color: var(--codex-text);
-  background: transparent !important;
-  box-shadow: none !important;
+  background: transparent;
+  box-shadow: none;
   font: inherit;
   font-size: var(--codex-chat-font-size);
   line-height: 1.5;
@@ -1120,26 +1120,26 @@
 }
 
 .codex-agent-picker-row:last-child {
-  border-bottom: 0 !important;
+  border-bottom: 0;
 }
 
 .codex-agent-picker-row.is-selected {
-  background: color-mix(in srgb, var(--codex-blue) 14%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-blue) 14%, transparent);
 }
 
 .codex-agent-picker-row:hover:not(.is-selected) {
-  background: var(--codex-faint) !important;
+  background: var(--codex-faint);
 }
 
 .codex-agent-picker-row:focus,
 .codex-agent-picker-row:active {
-  background: var(--codex-faint-strong) !important;
-  box-shadow: none !important;
+  background: var(--codex-faint-strong);
+  box-shadow: none;
 }
 
 .codex-agent-picker-row.is-selected:focus,
 .codex-agent-picker-row.is-selected:active {
-  background: color-mix(in srgb, var(--codex-blue) 14%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-blue) 14%, transparent);
 }
 
 .codex-agent-picker-icon {
@@ -1166,7 +1166,11 @@
 }
 
 .codex-agent-picker-text {
-  display: contents;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
 }
 
 .codex-agent-picker-label {
@@ -1374,26 +1378,26 @@
   width: 100%;
   min-height: 48px;
   padding: 8px 10px;
-  border: 0 !important;
-  border-bottom: 1px solid var(--codex-line) !important;
-  border-radius: 0 !important;
+  border: 0;
+  border-bottom: 1px solid var(--codex-line);
+  border-radius: 0;
   color: var(--codex-text);
-  background: transparent !important;
-  box-shadow: none !important;
+  background: transparent;
+  box-shadow: none;
   text-align: left;
   cursor: pointer;
 }
 
 .codex-agent-aux-mode-row:last-child {
-  border-bottom: 0 !important;
+  border-bottom: 0;
 }
 
 .codex-agent-aux-mode-row:hover {
-  background: var(--codex-faint) !important;
+  background: var(--codex-faint);
 }
 
 .codex-agent-aux-mode-row.is-selected {
-  background: color-mix(in srgb, var(--codex-blue) 10%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-blue) 10%, transparent);
 }
 
 .codex-agent-aux-mode-marker {
@@ -1595,7 +1599,7 @@
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  font-family: var(--font-monospace), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 13px;
 }
 
@@ -1646,7 +1650,7 @@
   grid-template-columns: minmax(0, 1fr);
   min-width: 520px;
   color: var(--codex-text);
-  font-family: var(--font-monospace), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -1770,13 +1774,13 @@
 
 .theme-light .codex-agent-picker-row.is-selected,
 .theme-light .codex-agent-approval-choice.is-selected {
-  background: color-mix(in srgb, var(--codex-blue) 12%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-blue) 12%, transparent);
 }
 
 .theme-light .codex-agent-picker-row:hover:not(.is-selected),
 .theme-light .codex-agent-picker-row:focus:not(.is-selected),
 .theme-light .codex-agent-picker-row:active:not(.is-selected) {
-  background: var(--codex-faint) !important;
+  background: var(--codex-faint);
 }
 
 .theme-light .codex-agent-picker-icon,
