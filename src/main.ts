@@ -27,7 +27,7 @@ const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 const DEFAULT_CODEX_BIN = "codex";
 const PLUGIN_ID = "codex-ai-agent";
 const PLUGIN_NAME = "Codex AI Agent";
-const PLUGIN_VERSION = "0.1.3";
+const PLUGIN_VERSION = "0.1.4";
 const GITHUB_URL = "https://github.com/j4charlie/codex-ai-agent";
 const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues`;
 const COMMON_CODEX_BINS = [
@@ -164,10 +164,16 @@ interface PlanChecklistItem {
   status: "pending" | "in_progress" | "completed";
 }
 
+type TimelineMessagePart =
+  | { type: "text"; text: string }
+  | { type: "chip"; chip: Pick<ContextChip, "id" | "kind" | "label" | "path"> };
+
 interface TimelineItem {
   title: string;
   body: string;
   tone: "status" | "command" | "response" | "user" | "tool";
+  contextChips?: Pick<ContextChip, "id" | "kind" | "label" | "path">[];
+  messageParts?: TimelineMessagePart[];
   approvalId?: string;
   toolItemId?: string;
   commandGroupId?: string;
@@ -759,6 +765,11 @@ class AppServerAdapter implements CodexAdapter {
       return;
     }
 
+    if (this.isReasoningNotification(method)) {
+      onEvent({ type: "status", state: "thinking", title: "Thinking" });
+      return;
+    }
+
     if (method === "item/started") {
       this.handleItemStarted(params.item, onEvent);
       return;
@@ -772,7 +783,10 @@ class AppServerAdapter implements CodexAdapter {
     if (method === "item/commandExecution/outputDelta") {
       const itemId = params.itemId ?? "command";
       const delta = params.delta ?? "";
-      const current = this.commandBuffers.get(itemId) ?? { command: "Command output", output: "" };
+      const current = this.commandBuffers.get(itemId);
+      if (!current) {
+        return;
+      }
       current.output += delta;
       this.commandBuffers.set(itemId, current);
       onEvent({
@@ -846,6 +860,11 @@ class AppServerAdapter implements CodexAdapter {
       return;
     }
 
+    if (this.isReasoningItem(item)) {
+      onEvent({ type: "status", state: "thinking", title: "Thinking" });
+      return;
+    }
+
     if (item.type === "agentMessage") {
       const buffered = this.agentBuffers.get(item.id);
       const markdown = item.text ?? buffered ?? "";
@@ -882,10 +901,6 @@ class AppServerAdapter implements CodexAdapter {
         cwd: item.cwd,
         status: item.exitCode === 0 ? "done" : item.exitCode === null ? "running" : "failed"
       });
-      const toolEvent = this.describeToolEvent(item, item.exitCode === 0 ? "done" : item.exitCode === null ? "running" : "failed");
-      if (toolEvent) {
-        onEvent(toolEvent);
-      }
       return;
     }
 
@@ -896,6 +911,11 @@ class AppServerAdapter implements CodexAdapter {
   }
 
   private handleItemStarted(item: any, onEvent: (event: AgentEvent) => void) {
+    if (this.isReasoningItem(item)) {
+      onEvent({ type: "status", state: "thinking", title: "Thinking" });
+      return;
+    }
+
     const planItems = extractPlanItemsFromItem(item);
     if (item?.type === "plan" && planItems.length > 0) {
       onEvent({
@@ -920,15 +940,31 @@ class AppServerAdapter implements CodexAdapter {
         cwd: item.cwd,
         status: "running"
       });
+      return;
     }
+
     const toolEvent = this.describeToolEvent(item, "running");
     if (toolEvent) {
       onEvent(toolEvent);
     }
   }
 
+  private isReasoningItem(item: any) {
+    const type = String(item?.type ?? "").toLowerCase();
+    const title = String(item?.title ?? item?.name ?? "").toLowerCase();
+    return type === "reasoning" || type === "thinking" || title.includes("thinking") || title.includes("reasoning");
+  }
+
+  private isReasoningNotification(method: any) {
+    const normalized = String(method ?? "").toLowerCase();
+    return normalized.includes("reasoning") || normalized.includes("thinking");
+  }
+
   private describeToolEvent(item: any, status: "running" | "done" | "failed"): Extract<AgentEvent, { type: "tool" }> | null {
     if (!item?.id || item.type === "agentMessage" || item.type === "userMessage" || item.type === "reasoning" || item.type === "plan") {
+      return null;
+    }
+    if (this.isNoisyToolEvent(item)) {
       return null;
     }
 
@@ -962,6 +998,12 @@ class AppServerAdapter implements CodexAdapter {
       status,
       filePath
     };
+  }
+
+  private isNoisyToolEvent(item: any) {
+    const type = String(item?.type ?? "").toLowerCase();
+    const toolName = String(item?.tool ?? item?.name ?? "").toLowerCase();
+    return type === "filechange" || toolName === "filechange";
   }
 
   private extractFilePathFromArguments(args: any): string | undefined {
@@ -1308,6 +1350,7 @@ export default class CodexForObsidianPlugin extends Plugin {
   }
 
   getSkills(): SkillDefinition[] {
+    this.availableSkills = this.loadAvailableSkills();
     return this.availableSkills.map((skill) => ({ ...skill }));
   }
 
@@ -1385,11 +1428,41 @@ export default class CodexForObsidianPlugin extends Plugin {
 
   private getSkillSearchRoots(): string[] {
     const home = os.homedir?.() || process.env.HOME || "";
-    return [
+    const cwd = typeof process.cwd === "function" ? process.cwd() : "";
+    const roots = [
       path.join(home, ".codex", "skills"),
       path.join(home, ".cc-switch", "skills"),
-      path.join(home, ".agents", "skills")
+      path.join(home, ".agents", "skills"),
+      cwd ? path.join(cwd, "skills") : "",
+      cwd ? path.join(cwd, ".codex", "skills") : "",
+      cwd ? path.join(cwd, ".cc-switch", "skills") : "",
+      cwd ? path.join(cwd, ".agents", "skills") : ""
     ];
+    const pluginBasePath = this.getPluginBasePath();
+    if (pluginBasePath) {
+      roots.push(
+        path.join(pluginBasePath, "skills"),
+        path.join(pluginBasePath, ".codex", "skills"),
+        path.join(pluginBasePath, ".cc-switch", "skills"),
+        path.join(pluginBasePath, ".agents", "skills")
+      );
+    }
+    return [...new Set(roots.filter((root) => root && root.trim()))];
+  }
+
+  private getPluginBasePath(): string {
+    const adapter = this.app.vault.adapter as any;
+    let vaultBasePath = "";
+    try {
+      vaultBasePath = typeof adapter?.getBasePath === "function" ? adapter.getBasePath() : "";
+    } catch {
+      vaultBasePath = "";
+    }
+    const manifestDir = (this.manifest as any)?.dir;
+    if (!vaultBasePath || !manifestDir) {
+      return "";
+    }
+    return path.join(vaultBasePath, manifestDir);
   }
 
   private findSkillFiles(root: string, maxDepth: number): string[] {
@@ -1544,6 +1617,37 @@ export default class CodexForObsidianPlugin extends Plugin {
             title: item.title,
             body: item.body,
             tone: ["status", "command", "response", "user", "tool"].includes(item.tone) ? item.tone : "status",
+            contextChips: Array.isArray(item.contextChips)
+              ? item.contextChips
+                .filter((chip: any) => typeof chip?.id === "string" && typeof chip?.label === "string" && typeof chip?.kind === "string")
+                .map((chip: any) => ({
+                  id: chip.id,
+                  kind: ["selection", "file", "folder", "image", "skill"].includes(chip.kind) ? chip.kind : "file",
+                  label: chip.label,
+                  path: typeof chip.path === "string" ? chip.path : undefined
+                }))
+              : undefined,
+            messageParts: Array.isArray(item.messageParts)
+              ? item.messageParts
+                .map((part: any) => {
+                  if (part?.type === "text" && typeof part.text === "string") {
+                    return { type: "text" as const, text: part.text };
+                  }
+                  if (part?.type === "chip" && typeof part.chip?.id === "string" && typeof part.chip?.label === "string") {
+                    return {
+                      type: "chip" as const,
+                      chip: {
+                        id: part.chip.id,
+                        kind: ["selection", "file", "folder", "image", "skill"].includes(part.chip.kind) ? part.chip.kind : "file",
+                        label: part.chip.label,
+                        path: typeof part.chip.path === "string" ? part.chip.path : undefined
+                      }
+                    };
+                  }
+                  return null;
+                })
+                .filter((part: TimelineMessagePart | null): part is TimelineMessagePart => part !== null)
+              : undefined,
             approvalId: typeof item.approvalId === "string" ? item.approvalId : undefined,
             toolItemId: typeof item.toolItemId === "string" ? item.toolItemId : undefined,
             commandGroupId: typeof item.commandGroupId === "string" ? item.commandGroupId : undefined,
@@ -2089,6 +2193,8 @@ class CodexAgentView extends ItemView {
   private liveStatusEl: HTMLElement | null = null;
   private liveStatusTextEl: HTMLElement | null = null;
   private elapsedTimer: number | null = null;
+  private currentRunStatusTitle = "Thinking";
+  private currentRunStatusBody = "";
   private shouldShowScrollBottomButton = false;
   private currentDiffStats: any = null;
 
@@ -2386,11 +2492,15 @@ class CodexAgentView extends ItemView {
     }
     session.timeline.forEach((item, index) => {
       const row = this.timelineContainer!.createDiv(`codex-agent-event is-${item.tone}`);
+      if (item.tone === "status" && item.title.startsWith("Processed")) {
+        row.addClass("is-processed");
+      }
       if (item.tone === "user") {
         row.setAttr("data-user-message-index", String(index));
       }
       const content = row.createDiv("codex-agent-event-content");
       if (item.tone === "response") {
+        this.renderMessageCopyButton(content, item.body, "Copy agent response");
         if (item.streaming) {
           content.createEl("p", { cls: "codex-agent-streaming-text", text: item.body });
         } else {
@@ -2399,7 +2509,8 @@ class CodexAgentView extends ItemView {
             .then(() => this.bindObsidianFileLinks(markdown));
         }
       } else if (item.tone === "user") {
-        content.createEl("p", { text: item.body });
+        this.renderMessageCopyButton(content, item.body, "Copy user message");
+        this.renderUserMessageParts(content, item);
       } else {
         const approval = item.approvalId ? this.pendingApprovals.get(item.approvalId) : undefined;
         if (item.commandGroupId) {
@@ -2437,6 +2548,71 @@ class CodexAgentView extends ItemView {
     }
     this.updateScrollBottomButton();
     this.updateStickyUserPrompt();
+  }
+
+  private renderMessageCopyButton(content: HTMLElement, text: string, label: string) {
+    if (!text.trim()) {
+      return;
+    }
+
+    content.addClass("codex-agent-copyable-message");
+    const button = content.createEl("button", {
+      cls: "codex-agent-copy-message",
+      attr: {
+        type: "button",
+        "aria-label": label,
+        title: label
+      }
+    });
+    setIcon(button, "copy");
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await this.copyTextToClipboard(text);
+    });
+  }
+
+  private renderUserMessageParts(content: HTMLElement, item: TimelineItem) {
+    const parts = item.messageParts && item.messageParts.length > 0
+      ? item.messageParts
+      : this.buildFallbackMessageParts(item);
+    const paragraph = content.createEl("p", { cls: "codex-agent-user-message-inline" });
+    parts.forEach((part) => {
+      if (part.type === "text") {
+        paragraph.appendChild(document.createTextNode(part.text));
+        return;
+      }
+      this.renderInlineMessageChip(paragraph, part.chip);
+    });
+  }
+
+  private buildFallbackMessageParts(item: TimelineItem): TimelineMessagePart[] {
+    const parts: TimelineMessagePart[] = [];
+    (item.contextChips ?? []).forEach((chip) => parts.push({ type: "chip", chip }));
+    if (item.body) {
+      if (parts.length > 0) {
+        parts.push({ type: "text", text: " " });
+      }
+      parts.push({ type: "text", text: item.body });
+    }
+    return parts;
+  }
+
+  private renderInlineMessageChip(parent: HTMLElement, chip: Pick<ContextChip, "id" | "kind" | "label" | "path">) {
+    const chipEl = parent.createSpan(`codex-agent-chip codex-agent-message-chip is-${chip.kind}`);
+    chipEl.setAttr("title", chip.path ?? chip.label);
+    const icon = chipEl.createSpan({ cls: `codex-agent-chip-icon is-${chip.kind}` });
+    setIcon(icon, this.getContextChipIcon(chip));
+    chipEl.createSpan({ cls: "codex-agent-chip-label", text: chip.label });
+  }
+
+  private async copyTextToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      new Notice("Message copied.");
+    } catch (error) {
+      new Notice(`Copy failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private bindObsidianFileLinks(container: HTMLElement) {
@@ -2524,10 +2700,11 @@ class CodexAgentView extends ItemView {
     const byFile = this.parseDiffStats(item.diffText ?? "").files;
     const files = byFile.length > 0 ? byFile : (item.diffFiles ?? []).map((path) => ({ path, added: 0, removed: 0, lines: [] }));
     const expandedFiles = new Set(item.diffExpandedFiles ?? (item.expanded ? files.map((file) => file.path) : []));
+    const shouldAnimateCounts = this.shouldAnimateDiffCounts(item);
     const header = parent.createDiv("codex-agent-diff-card-head");
     const title = header.createDiv("codex-agent-diff-card-title");
     title.createSpan({ text: `Edited ${files.length} files` });
-    this.renderDiffCounts(title, item.diffAdded ?? 0, item.diffRemoved ?? 0, Boolean(item.diffAnimatedAt));
+    this.renderDiffCounts(title, item.diffAdded ?? 0, item.diffRemoved ?? 0, shouldAnimateCounts);
     const toggle = header.createEl("button", {
       cls: "codex-agent-diff-toggle",
       text: expandedFiles.size > 0 ? "Collapse all" : "Expand all"
@@ -2545,12 +2722,19 @@ class CodexAgentView extends ItemView {
       row.createSpan({ cls: "codex-agent-diff-file-name", text: file.path });
       const meta = row.createSpan("codex-agent-diff-file-meta");
       const counts = meta.createSpan("codex-agent-diff-file-counts");
-      this.renderDiffCounts(counts, file.added, file.removed, Boolean(item.diffAnimatedAt));
+      this.renderDiffCounts(counts, file.added, file.removed, shouldAnimateCounts);
       meta.createSpan({ cls: "codex-agent-diff-caret", text: expanded ? "⌃" : "⌄" });
       if (expanded) {
         this.renderDiffFileLines(list, file);
       }
     });
+  }
+
+  private shouldAnimateDiffCounts(item: TimelineItem) {
+    if (!item.diffAnimatedAt) {
+      return false;
+    }
+    return Date.now() - item.diffAnimatedAt < 700;
   }
 
   private renderDiffCounts(parent: HTMLElement, added: number, removed: number, animated: boolean) {
@@ -3722,6 +3906,7 @@ class CodexAgentView extends ItemView {
       this.updateRunButtonDisabledState();
       return;
     }
+    const messageParts = this.getPromptMessageParts();
     const payload = await this.buildCodexPayload(prompt);
     const attached = payload.context.length;
     const summary = payload.context.length > 0
@@ -3746,7 +3931,14 @@ class CodexAgentView extends ItemView {
       {
         title: "You",
         body: prompt,
-        tone: "user"
+        tone: "user",
+        contextChips: payload.context.map((item) => ({
+          id: item.id,
+          kind: item.kind,
+          label: item.label,
+          path: item.path
+        })),
+        messageParts
       },
       {
         title: "Thinking",
@@ -3756,6 +3948,8 @@ class CodexAgentView extends ItemView {
     ];
     session.statusItemIndex = session.timeline.length - 1;
     session.runStartedAt = Date.now();
+    this.currentRunStatusTitle = "Thinking";
+    this.currentRunStatusBody = attached > 0 ? `Read ${attached} context items: ${summary}` : "No context attached";
     this.runningSessionId = session.id;
     this.isCancellingRun = false;
     this.activeResponseItemId = null;
@@ -3834,6 +4028,86 @@ class CodexAgentView extends ItemView {
     const clone = this.promptInput.cloneNode(true) as HTMLElement;
     clone.querySelectorAll(".codex-agent-chip").forEach((node) => node.remove());
     return this.stripPromptControlText(clone.innerText).trim();
+  }
+
+  private getPromptMessageParts(): TimelineMessagePart[] {
+    if (!this.promptInput) {
+      return [];
+    }
+
+    const chipsById = new Map(this.contextChips.map((chip) => [chip.id, chip]));
+    const parts: TimelineMessagePart[] = [];
+    const addText = (text: string) => {
+      const clean = this.stripPromptControlText(text);
+      if (!clean) {
+        return;
+      }
+      const previous = parts[parts.length - 1];
+      if (previous?.type === "text") {
+        previous.text += clean;
+      } else {
+        parts.push({ type: "text", text: clean });
+      }
+    };
+    const addChip = (element: HTMLElement) => {
+      const id = element.getAttribute("data-context-id");
+      if (!id) {
+        return;
+      }
+      const chip = chipsById.get(id);
+      const label = element.querySelector<HTMLElement>(".codex-agent-chip-label")?.innerText.trim();
+      const kind = element.getAttribute("data-context-kind");
+      const normalizedKind = kind && ["selection", "file", "folder", "image", "skill"].includes(kind)
+        ? kind as ContextChip["kind"]
+        : chip?.kind;
+      if (!chip && (!label || !normalizedKind)) {
+        return;
+      }
+      parts.push({
+        type: "chip",
+        chip: {
+          id,
+          kind: normalizedKind ?? "file",
+          label: chip?.label ?? label ?? "Context",
+          path: chip?.path ?? element.getAttribute("data-context-path") ?? undefined
+        }
+      });
+    };
+    const walk = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        addText(node.textContent ?? "");
+        return;
+      }
+      if (node instanceof HTMLBRElement) {
+        addText("\n");
+        return;
+      }
+      if (!(node instanceof HTMLElement)) {
+        return;
+      }
+      if (node.hasClass("codex-agent-chip")) {
+        addChip(node);
+        return;
+      }
+      node.childNodes.forEach(walk);
+    };
+
+    this.promptInput.childNodes.forEach(walk);
+    const first = parts[0];
+    if (first?.type === "text") {
+      first.text = first.text.trimStart();
+      if (!first.text) {
+        parts.shift();
+      }
+    }
+    const last = parts[parts.length - 1];
+    if (last?.type === "text") {
+      last.text = last.text.trimEnd();
+      if (!last.text) {
+        parts.pop();
+      }
+    }
+    return parts.length > 0 ? parts : [{ type: "text", text: this.getPromptText() }];
   }
 
   private clearComposer() {
@@ -4026,12 +4300,12 @@ class CodexAgentView extends ItemView {
 
     if (event.type === "message") {
       this.markActiveResponseComplete();
-      this.updateTranscriptStatus(`Processed ${this.getElapsedLabel()}`, "");
       this.appendTimelineItem({
         title: "",
         body: event.markdown,
         tone: "response"
       });
+      this.updateTranscriptStatus(this.getProcessedStatusTitle(), "");
       return;
     }
 
@@ -4048,9 +4322,11 @@ class CodexAgentView extends ItemView {
     }
 
     if (event.type === "command") {
-      this.setLiveStatus("running", "Running");
-      this.updateTranscriptStatus(`Running ${this.getElapsedLabel()}`, event.command);
+      const isComplete = event.status === "done";
+      const isFailed = event.status === "failed";
+      this.setLiveStatus(isComplete ? "running" : isFailed ? "error" : "running", isComplete ? "Command complete" : isFailed ? "Command failed" : "Running");
       this.upsertCommandTimelineItem(event);
+      this.updateWorkingTranscriptStatus(isComplete ? "Command complete" : isFailed ? "Command failed" : "Running command", event.command);
       return;
     }
 
@@ -4089,6 +4365,7 @@ class CodexAgentView extends ItemView {
         tone: "command",
         approvalId: event.id
       });
+      this.updateWorkingTranscriptStatus("Waiting for approval", event.detail);
       this.renderSessionTabs();
       this.notifyApprovalIfNeeded(approval);
       return;
@@ -4120,7 +4397,11 @@ class CodexAgentView extends ItemView {
       }
     }
     this.setLiveStatus(event.state, event.title);
-    this.updateTranscriptStatus(this.formatStatusTitle(event), event.detail ?? "");
+    if (event.state === "done") {
+      this.updateTranscriptStatus(this.getProcessedStatusTitle(), event.detail ?? "");
+    } else {
+      this.updateWorkingTranscriptStatus(event.title, event.detail ?? "");
+    }
   }
 
   private upsertPlanTimelineItem(event: Extract<AgentEvent, { type: "plan" }>) {
@@ -4151,7 +4432,7 @@ class CodexAgentView extends ItemView {
   }
 
   private upsertToolTimelineItem(event: Extract<AgentEvent, { type: "tool" }>) {
-    if (!event.filePath && (event.title.includes("Run command") || event.title.includes("Command failed"))) {
+    if (!event.filePath && event.title.toLowerCase().includes("command")) {
       return;
     }
 
@@ -4179,6 +4460,7 @@ class CodexAgentView extends ItemView {
       session.timeline = [...session.timeline, item];
     }
 
+    this.moveTranscriptStatusToEnd(session);
     session.updatedAt = Date.now();
     this.persistSessions();
     if (session.id === this.activeSessionId) {
@@ -4196,13 +4478,14 @@ class CodexAgentView extends ItemView {
       commands.push(event.command);
     }
     const hasFailure = event.status === "failed" || existing?.title === "Command failed";
+    const isRunning = event.status === "running";
     const item: TimelineItem = {
       title: hasFailure
         ? "Command failed"
-        : event.status === "running"
+        : isRunning
           ? "Running command"
-          : `Ran ${commands.length} commands`,
-      body: commands.length > 0 ? `${commands.length} commands` : "Running command",
+          : `Command complete (${commands.length})`,
+      body: commands.length > 0 ? `${commands.length} command${commands.length === 1 ? "" : "s"}` : "Running command",
       tone: "tool",
       commandGroupId: groupId,
       commands,
@@ -4445,6 +4728,7 @@ class CodexAgentView extends ItemView {
     }
 
     session.timeline[index].body += delta;
+    this.moveTranscriptStatusToEnd(session);
     session.updatedAt = Date.now();
     this.persistSessions();
     if (session.id === this.activeSessionId) {
@@ -4774,22 +5058,19 @@ class CodexAgentView extends ItemView {
         tone: "command"
       });
     } else {
-      this.updateTranscriptStatus(`Processed ${this.getElapsedLabel()}`, "");
+      this.updateTranscriptStatus(this.getProcessedStatusTitle(), "");
     }
     this.persistSessions();
   }
 
-  private formatStatusTitle(event: Extract<AgentEvent, { type: "status" }>) {
-    if (event.state === "done") {
-      return `Processed ${this.getElapsedLabel()}`;
-    }
-    if (event.state === "running") {
-      return `${event.title} ${this.getElapsedLabel()}`;
-    }
-    if (event.state === "thinking") {
-      return `${event.title} ${this.getElapsedLabel()}`;
-    }
-    return event.title;
+  private updateWorkingTranscriptStatus(title: string, body = "") {
+    this.currentRunStatusTitle = title;
+    this.currentRunStatusBody = body;
+    this.updateTranscriptStatus(title, body);
+  }
+
+  private getProcessedStatusTitle() {
+    return `Processed ${this.getElapsedLabel()}`;
   }
 
   private setLiveStatus(status: "idle" | "thinking" | "running" | "done" | "error", text: string) {
@@ -4820,10 +5101,25 @@ class CodexAgentView extends ItemView {
       session.statusItemIndex = session.timeline.length - 1;
     } else {
       session.timeline[session.statusItemIndex] = item;
+      this.moveTranscriptStatusToEnd(session);
     }
     session.updatedAt = Date.now();
     if (session.id === this.activeSessionId) {
       this.renderTimelineItems();
+    }
+  }
+
+  private moveTranscriptStatusToEnd(session: AgentSession) {
+    const index = session.statusItemIndex;
+    if (index === null || index < 0 || index >= session.timeline.length || index === session.timeline.length - 1) {
+      return;
+    }
+
+    const [item] = session.timeline.splice(index, 1);
+    session.timeline.push(item);
+    session.statusItemIndex = session.timeline.length - 1;
+    if (this.activeResponseItemIndex !== null && session.id === this.runningSessionId && index < this.activeResponseItemIndex) {
+      this.activeResponseItemIndex -= 1;
     }
   }
 
@@ -4846,7 +5142,7 @@ class CodexAgentView extends ItemView {
     this.stopElapsedTimer();
     this.elapsedTimer = window.setInterval(() => {
       if (this.runningProcess) {
-        this.updateTranscriptStatus(`Thinking ${this.getElapsedLabel()}`);
+        this.updateTranscriptStatus(this.currentRunStatusTitle, this.currentRunStatusBody);
       }
     }, 1000);
   }

@@ -614,6 +614,18 @@
   background: rgba(139, 183, 255, 0.1);
 }
 
+.codex-agent-event.is-user .codex-agent-event-content,
+.codex-agent-event.is-response .codex-agent-event-content {
+  user-select: text;
+  cursor: text;
+}
+
+.codex-agent-message-chip {
+  max-width: min(100%, 260px);
+  margin: 0 4px;
+  vertical-align: 0.08em;
+}
+
 .codex-agent-event.is-user .codex-agent-event-content p {
   color: var(--codex-text);
   font-size: var(--codex-chat-font-size);
@@ -759,6 +771,7 @@
 }
 
 .codex-agent-event-content {
+  position: relative;
   padding: 9px 10px;
   border: 1px solid var(--codex-line);
   border-radius: 7px;
@@ -772,11 +785,54 @@
   background: transparent;
 }
 
+.codex-agent-event-content.codex-agent-copyable-message {
+  padding-right: 36px;
+}
+
+.codex-agent-copy-message {
+  appearance: none;
+  -webkit-appearance: none;
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--codex-line);
+  border-radius: 6px;
+  background: var(--codex-panel);
+  box-shadow: none;
+  color: var(--codex-muted);
+  cursor: pointer;
+  opacity: 0;
+  user-select: none;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.codex-agent-copy-message svg {
+  width: 14px;
+  height: 14px;
+}
+
+.codex-agent-copyable-message:hover .codex-agent-copy-message,
+.codex-agent-copy-message:focus-visible {
+  opacity: 1;
+}
+
+.codex-agent-copy-message:hover,
+.codex-agent-copy-message:focus-visible {
+  border-color: rgba(139, 183, 255, 0.48);
+  background: var(--codex-panel-2);
+  color: var(--codex-text);
+}
+
 .codex-agent-event.is-status .codex-agent-event-content {
-  padding: 4px 0 12px;
+  padding: 4px 0 6px;
   border: 0;
-  border-bottom: 1px solid var(--codex-line);
-  border-radius: 0;
   background: transparent;
 }
 
@@ -792,11 +848,43 @@
 }
 
 .codex-agent-event.is-status .codex-agent-event-content h4 {
-  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 4px;
   color: var(--codex-muted);
-  font-size: 13px;
-  line-height: 17px;
-  font-weight: 700;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 650;
+}
+
+.codex-agent-event.is-status:not(.is-processed) .codex-agent-event-content h4 {
+  background: linear-gradient(100deg, var(--codex-muted) 0%, var(--codex-muted) 32%, var(--codex-text) 48%, var(--codex-blue) 56%, var(--codex-muted) 72%, var(--codex-muted) 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: codex-agent-text-shimmer 1.7s ease-in-out infinite;
+}
+
+.codex-agent-event.is-status .codex-agent-event-content h4::before {
+  content: "▹";
+  margin-right: 6px;
+  color: var(--codex-muted);
+}
+
+.codex-agent-event.is-status.is-processed .codex-agent-event-content h4::before {
+  content: "✓";
+  color: var(--codex-green);
+}
+
+@keyframes codex-agent-text-shimmer {
+  0% {
+    background-position: 120% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
 }
 
 .codex-agent-event-content p {
@@ -1048,9 +1136,9 @@
 }
 
 .codex-agent-event.is-status .codex-agent-event-content p {
-  margin-top: 8px;
-  color: var(--codex-muted);
-  font-size: 11px;
+  color: rgba(238, 241, 244, 0.58);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .codex-agent-composer {
