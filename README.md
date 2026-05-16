@@ -138,7 +138,7 @@ In Agent mode, Codex may request shell command execution, file changes, or expan
    styles.css
    ```
 
-5. For the first public listing, submit a pull request to `obsidianmd/obsidian-releases` and add an entry to `community-plugins.json`.
+5. For the first public listing, submit the GitHub repository URL through the Obsidian Community directory at <https://community.obsidian.md> after signing in and linking your GitHub account. The directory reads `manifest.json` from the default branch and installs assets from the GitHub release whose tag matches the manifest version.
 
 ## License
 
