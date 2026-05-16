@@ -1,9 +1,9 @@
 {
-  "id": "codex-vault-agent",
-  "name": "codex-vault-agent",
+  "id": "codex-ai-agent",
+  "name": "Codex AI Agent",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
-  "description": "Run Codex as a local vault agent with note context, approvals, and reviewable file changes.",
+  "description": "Run Codex CLI as a local AI agent with note context, approvals, and reviewable file changes.",
   "author": "j4charlie",
   "authorUrl": "https://github.com/j4charlie",
   "isDesktopOnly": true

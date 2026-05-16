@@ -25,7 +25,9 @@ const path = require("path");
 
 const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 const DEFAULT_CODEX_BIN = "codex";
-const GITHUB_URL = "https://github.com/j4charlie/codex-vault-agent";
+const PLUGIN_ID = "codex-ai-agent";
+const PLUGIN_NAME = "Codex AI Agent";
+const GITHUB_URL = "https://github.com/j4charlie/codex-ai-agent";
 const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues`;
 const COMMON_CODEX_BINS = [
   "codex",
@@ -551,8 +553,8 @@ class AppServerAdapter implements CodexAdapter {
 
     this.sendRequest("initialize", {
       clientInfo: {
-        name: "codex-vault-agent",
-        title: "codex-vault-agent",
+        name: PLUGIN_ID,
+        title: PLUGIN_NAME,
         version: "0.1.0"
       },
       capabilities: {
@@ -1198,19 +1200,19 @@ export default class CodexForObsidianPlugin extends Plugin {
       (leaf) => new CodexAgentView(leaf, this)
     );
 
-    this.addRibbonIcon(AGENT_ICON_ID, "Open codex-vault-agent", () => {
+    this.addRibbonIcon(AGENT_ICON_ID, "Open Codex AI Agent", () => {
       this.activateView();
     });
 
     this.addCommand({
       id: "open-codex-agent",
-      name: "Open codex-vault-agent",
+      name: "Open agent",
       callback: () => this.activateView()
     });
 
     this.addCommand({
       id: "attach-active-note-to-codex-agent",
-      name: "Attach active note to codex-vault-agent",
+      name: "Attach active note",
       callback: async () => {
         const file = this.app.workspace.getActiveFile();
         if (!file) {
@@ -1662,7 +1664,7 @@ class CodexAgentSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     const settings = this.owner.getSettings();
     containerEl.empty();
-    containerEl.createEl("h2", { text: "codex-vault-agent" });
+    containerEl.createEl("h2", { text: PLUGIN_NAME });
     this.renderProjectLinks(containerEl);
     this.renderSetup(containerEl, settings);
     this.renderDefaults(containerEl, settings);
@@ -2108,7 +2110,7 @@ class CodexAgentView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "codex-vault-agent";
+    return PLUGIN_NAME;
   }
 
   getIcon(): string {

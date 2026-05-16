@@ -1,7 +1,7 @@
 {
-  "name": "codex-vault-agent",
+  "name": "codex-ai-agent",
   "version": "0.1.0",
-  "description": "Run Codex as a local vault agent with note context, approvals, and reviewable file changes.",
+  "description": "Run Codex CLI as a local AI agent with note context, approvals, and reviewable file changes.",
   "main": "main.js",
   "scripts": {
     "build": "node esbuild.config.mjs production",

@@ -9,7 +9,7 @@ This project is an Obsidian plugin whose runtime entry is the generated `main.js
 Important paths:
 
 - Source workspace: repository root
-- Obsidian demo install: `<your-vault>/.obsidian/plugins/codex-vault-agent`
+- Obsidian demo install: `<your-vault>/.obsidian/plugins/codex-ai-agent`
 - Runtime entry file: `main.js`
 - TypeScript source: `src/main.ts`
 - Styles: `styles.css`
@@ -26,7 +26,7 @@ Build status:
 Demo testing plugin directory:
 
 ```text
-<your-vault>/.obsidian/plugins/codex-vault-agent
+<your-vault>/.obsidian/plugins/codex-ai-agent
 ```
 
 When asked to push changes for demo testing, copy at least these files there:

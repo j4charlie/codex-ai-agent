@@ -1,16 +1,12 @@
-# codex-vault-agent
+# Codex AI Agent
 
-codex-vault-agent is an independent community plugin for using the local Codex CLI inside an Obsidian vault. It is not affiliated with Obsidian or OpenAI.
+Codex AI Agent is an independent community plugin for using the local Codex CLI inside an Obsidian vault. It is not affiliated with Obsidian or OpenAI.
 
 ## Overview
 
-codex-vault-agent is a local Codex-powered agent panel for Obsidian. It brings Codex into the Obsidian knowledge-work flow, where it can answer questions with explicit note context, analyze and reorganize Markdown material, propose file edits, and run local tasks while keeping sensitive actions behind user review.
+Codex AI Agent is a local Codex-powered agent panel for Obsidian. It brings Codex into the Obsidian knowledge-work flow, where it can answer questions with explicit note context, analyze and reorganize Markdown material, propose file edits, and run local tasks while keeping sensitive actions behind user review.
 
 The plugin uses the official Codex integration path to provide an experience close to the native Codex agent: streaming responses, tool activity, multi-turn conversations, context attachments, diff review, and local history management.
-
-Personal suggestion: open files through Obsidian's Files and Links settings and enable detection for all file types. Used together with the Code files plugin from the Obsidian plugin marketplace, this can provide a better workflow for code-oriented notes and vault files. If you need a Material Icon Theme-style file tree plugin for the left file explorer, you can contact me in an issue. It is not public yet because authorization has not been granted.
-
-![[Pasted image 20260516110636.png]]
 
 ## Key Capabilities
 
@@ -43,7 +39,7 @@ Personal suggestion: open files through Obsidian's Files and Links settings and 
 
 ## Current Limitation
 
-codex-vault-agent cannot show the exact context-window usage percentage. The current official interface does not expose full context-window occupancy, so the plugin cannot accurately display a value such as "current context used: 72%".
+Codex AI Agent cannot show the exact context-window usage percentage. The current official interface does not expose full context-window occupancy, so the plugin cannot accurately display a value such as "current context used: 72%".
 
 ## Requirements
 
@@ -65,12 +61,12 @@ npm run build
 Copy these files into your vault plugin folder:
 
 ```text
-.obsidian/plugins/codex-vault-agent/main.js
-.obsidian/plugins/codex-vault-agent/manifest.json
-.obsidian/plugins/codex-vault-agent/styles.css
+.obsidian/plugins/codex-ai-agent/main.js
+.obsidian/plugins/codex-ai-agent/manifest.json
+.obsidian/plugins/codex-ai-agent/styles.css
 ```
 
-Then enable **codex-vault-agent** from Obsidian's Community plugins settings.
+Then enable **Codex AI Agent** from Obsidian's Community plugins settings.
 
 ## Development
 
@@ -91,14 +87,16 @@ npm run release:check
 For local testing, copy the release files to a test vault plugin directory:
 
 ```text
-<your-vault>/.obsidian/plugins/codex-vault-agent/
+<your-vault>/.obsidian/plugins/codex-ai-agent/
 ```
 
 ## Privacy and Security
 
-codex-vault-agent is desktop-only because it starts the local `codex` CLI as a child process. The plugin does not collect telemetry or store API keys.
+Codex AI Agent is desktop-only because it starts the local `codex` CLI as a child process. The plugin does not collect telemetry or store API keys.
 
-The plugin sends prompts, attached context, approval decisions, and selected file references to the local Codex CLI process. Codex then handles model provider access, authentication, sandboxing, network access, and any external services according to your Codex CLI configuration.
+The plugin sends prompts, attached context, approval decisions, selected text, and selected file references to the local Codex CLI process. If you attach a note, file, folder, or selection, that content can be included in the prompt sent to Codex CLI.
+
+Codex CLI handles model provider access, authentication, sandboxing, network access, and any external services according to your local Codex CLI configuration. Depending on that configuration, Codex CLI may send prompt content to external model providers.
 
 In Agent mode, Codex may request shell command execution, file changes, or expanded permissions. The plugin shows approval cards for those requests and does not silently approve them by default.
 
@@ -116,7 +114,8 @@ In Agent mode, Codex may request shell command execution, file changes, or expan
 ├── src/
 │   └── main.ts
 ├── styles.css
-└── tsconfig.json
+├── tsconfig.json
+└── versions.json
 ```
 
 ## Release Checklist
