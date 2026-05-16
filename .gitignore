@@ -4,7 +4,6 @@ node_modules/
 # Build output
 dist/
 build/
-main.js
 
 # Logs
 *.log
@@ -19,10 +18,11 @@ pnpm-debug.log*
 .vscode/
 
 # Obsidian local state
+.obsidian/
+ATTACHMENTS/
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
 
 # Environment
 .env
 .env.*
-
