@@ -27,9 +27,11 @@ const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 const DEFAULT_CODEX_BIN = "codex";
 const PLUGIN_ID = "codex-ai-agent";
 const PLUGIN_NAME = "Codex AI Agent";
-const PLUGIN_VERSION = "0.1.4";
+const PLUGIN_VERSION = "0.1.5";
 const GITHUB_URL = "https://github.com/j4charlie/codex-ai-agent";
 const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues`;
+const CODEX_MESSAGE_PARTS_MIME = "application/x-codex-agent-message-parts";
+const CODEX_MESSAGE_PARTS_ATTR = "data-codex-agent-message-parts";
 const COMMON_CODEX_BINS = [
   "codex",
   "/opt/homebrew/bin/codex",
@@ -166,13 +168,13 @@ interface PlanChecklistItem {
 
 type TimelineMessagePart =
   | { type: "text"; text: string }
-  | { type: "chip"; chip: Pick<ContextChip, "id" | "kind" | "label" | "path"> };
+  | { type: "chip"; chip: Pick<ContextChip, "id" | "kind" | "label" | "detail" | "path" | "text"> };
 
 interface TimelineItem {
   title: string;
   body: string;
   tone: "status" | "command" | "response" | "user" | "tool";
-  contextChips?: Pick<ContextChip, "id" | "kind" | "label" | "path">[];
+  contextChips?: Pick<ContextChip, "id" | "kind" | "label" | "detail" | "path" | "text">[];
   messageParts?: TimelineMessagePart[];
   approvalId?: string;
   toolItemId?: string;
@@ -217,6 +219,7 @@ interface AgentSession {
   title: string;
   timeline: TimelineItem[];
   tokenUsageTotal?: number;
+  tokenUsageInput?: number;
   tokenUsageLimit?: number | null;
   statusItemIndex: number | null;
   runStartedAt: number;
@@ -243,7 +246,7 @@ type AgentEvent =
   | { type: "tool"; itemId: string; title: string; detail?: string; status: "running" | "done" | "failed"; filePath?: string }
   | { type: "plan"; itemId: string; title: string; items: PlanChecklistItem[] }
   | { type: "approval"; id: string; approvalKind: "command" | "file" | "permissions"; title: string; detail: string; command?: string; cwd?: string; reason?: string; commandActions?: any[]; proposedExecpolicyAmendment?: any; proposedNetworkPolicyAmendments?: any[]; permissions?: any; respond: (response: any) => void }
-  | { type: "token_usage"; totalTokens: number; modelContextWindow?: number | null }
+  | { type: "token_usage"; totalTokens: number; inputTokens?: number; modelContextWindow?: number | null }
   | { type: "diff"; diff: string }
   | { type: "error"; title: string; message: string };
 
@@ -824,6 +827,7 @@ class AppServerAdapter implements CodexAdapter {
         onEvent({
           type: "token_usage",
           totalTokens,
+          inputTokens: typeof usage.last?.inputTokens === "number" ? usage.last.inputTokens : undefined,
           modelContextWindow: typeof usage.modelContextWindow === "number" ? usage.modelContextWindow : null
         });
       }
@@ -1235,7 +1239,11 @@ export default class CodexForObsidianPlugin extends Plugin {
   };
 
   async onload() {
-    this.agentData = this.normalizeAgentData(await this.loadData());
+    const rawData = await this.loadData();
+    this.agentData = this.normalizeAgentData(rawData);
+    if (rawData?.appServerDebugEvents) {
+      void this.saveData(this.agentData);
+    }
     this.availableSkills = this.loadAvailableSkills();
     this.addSettingTab(new CodexAgentSettingTab(this.app, this));
 
@@ -1609,6 +1617,7 @@ export default class CodexForObsidianPlugin extends Plugin {
       codexThreadId: typeof session.codexThreadId === "string" ? session.codexThreadId : undefined,
       title: typeof session.title === "string" ? session.title : "New Agent",
       tokenUsageTotal: typeof session.tokenUsageTotal === "number" ? session.tokenUsageTotal : undefined,
+      tokenUsageInput: typeof session.tokenUsageInput === "number" ? session.tokenUsageInput : undefined,
       tokenUsageLimit: typeof session.tokenUsageLimit === "number" ? session.tokenUsageLimit : null,
       timeline: Array.isArray(session.timeline)
         ? session.timeline
@@ -1624,7 +1633,9 @@ export default class CodexForObsidianPlugin extends Plugin {
                   id: chip.id,
                   kind: ["selection", "file", "folder", "image", "skill"].includes(chip.kind) ? chip.kind : "file",
                   label: chip.label,
-                  path: typeof chip.path === "string" ? chip.path : undefined
+                  detail: typeof chip.detail === "string" ? chip.detail : chip.path ?? chip.label,
+                  path: typeof chip.path === "string" ? chip.path : undefined,
+                  text: typeof chip.text === "string" ? chip.text : undefined
                 }))
               : undefined,
             messageParts: Array.isArray(item.messageParts)
@@ -1640,7 +1651,9 @@ export default class CodexForObsidianPlugin extends Plugin {
                         id: part.chip.id,
                         kind: ["selection", "file", "folder", "image", "skill"].includes(part.chip.kind) ? part.chip.kind : "file",
                         label: part.chip.label,
-                        path: typeof part.chip.path === "string" ? part.chip.path : undefined
+                        detail: typeof part.chip.detail === "string" ? part.chip.detail : part.chip.path ?? part.chip.label,
+                        path: typeof part.chip.path === "string" ? part.chip.path : undefined,
+                        text: typeof part.chip.text === "string" ? part.chip.text : undefined
                       }
                     };
                   }
@@ -2167,7 +2180,7 @@ class CodexAgentView extends ItemView {
   private historyOutsideClickHandler: ((event: MouseEvent) => void) | null = null;
   private timelineContainer: HTMLElement | null = null;
   private stickyUserPromptEl: HTMLElement | null = null;
-  private stickyUserPromptTextEl: HTMLElement | null = null;
+  private stickyUserPromptContentEl: HTMLElement | null = null;
   private stickyUserPromptIndex: number | null = null;
   private workbenchContainer: HTMLElement | null = null;
   private composerContainer: HTMLElement | null = null;
@@ -2195,6 +2208,7 @@ class CodexAgentView extends ItemView {
   private elapsedTimer: number | null = null;
   private currentRunStatusTitle = "Thinking";
   private currentRunStatusBody = "";
+  private currentRunMetaDetail = "";
   private shouldShowScrollBottomButton = false;
   private currentDiffStats: any = null;
 
@@ -2455,6 +2469,7 @@ class CodexAgentView extends ItemView {
       this.updateScrollBottomButton();
       this.updateStickyUserPrompt();
     });
+    this.timelineContainer.addEventListener("copy", (event) => this.handleTimelineCopy(event));
     this.renderTimelineItems();
     window.requestAnimationFrame(() => {
       this.scrollTimelineToBottom("auto");
@@ -2465,15 +2480,23 @@ class CodexAgentView extends ItemView {
   private renderStickyUserPrompt(parent: HTMLElement) {
     if (!this.owner.getSettings().stickyUserPrompts) {
       this.stickyUserPromptEl = null;
-      this.stickyUserPromptTextEl = null;
+      this.stickyUserPromptContentEl = null;
       return;
     }
-    this.stickyUserPromptEl = parent.createEl("button", {
+    this.stickyUserPromptEl = parent.createDiv({
       cls: "codex-agent-sticky-user-prompt",
-      attr: { type: "button", "aria-label": "Jump to current user prompt" }
+      attr: { role: "button", tabindex: "0", "aria-label": "Jump to current user prompt" }
     });
-    this.stickyUserPromptTextEl = this.stickyUserPromptEl.createSpan("codex-agent-sticky-user-text");
+    const stickyRow = this.stickyUserPromptEl.createDiv("codex-agent-event is-user codex-agent-sticky-user-row");
+    this.stickyUserPromptContentEl = stickyRow.createDiv("codex-agent-event-content codex-agent-sticky-user-content");
     this.stickyUserPromptEl.addEventListener("click", () => this.scrollToStickyUserPrompt());
+    this.stickyUserPromptEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      this.scrollToStickyUserPrompt();
+    });
   }
 
   private renderTimelineItems() {
@@ -2509,8 +2532,9 @@ class CodexAgentView extends ItemView {
             .then(() => this.bindObsidianFileLinks(markdown));
         }
       } else if (item.tone === "user") {
-        this.renderMessageCopyButton(content, item.body, "Copy user message");
-        this.renderUserMessageParts(content, item);
+        const parts = this.getTimelineMessageParts(item);
+        this.renderMessageCopyButton(content, item.body, "Copy user message", parts);
+        this.renderUserMessageParts(content, parts);
       } else {
         const approval = item.approvalId ? this.pendingApprovals.get(item.approvalId) : undefined;
         if (item.commandGroupId) {
@@ -2550,7 +2574,7 @@ class CodexAgentView extends ItemView {
     this.updateStickyUserPrompt();
   }
 
-  private renderMessageCopyButton(content: HTMLElement, text: string, label: string) {
+  private renderMessageCopyButton(content: HTMLElement, text: string, label: string, parts?: TimelineMessagePart[]) {
     if (!text.trim()) {
       return;
     }
@@ -2568,14 +2592,21 @@ class CodexAgentView extends ItemView {
     button.addEventListener("click", async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      await this.copyTextToClipboard(text);
+      if (parts && parts.length > 0) {
+        await this.copyMessagePartsToClipboard(parts, text);
+      } else {
+        await this.copyTextToClipboard(text);
+      }
     });
   }
 
-  private renderUserMessageParts(content: HTMLElement, item: TimelineItem) {
-    const parts = item.messageParts && item.messageParts.length > 0
+  private getTimelineMessageParts(item: TimelineItem) {
+    return item.messageParts && item.messageParts.length > 0
       ? item.messageParts
       : this.buildFallbackMessageParts(item);
+  }
+
+  private renderUserMessageParts(content: HTMLElement, parts: TimelineMessagePart[]) {
     const paragraph = content.createEl("p", { cls: "codex-agent-user-message-inline" });
     parts.forEach((part) => {
       if (part.type === "text") {
@@ -2598,9 +2629,21 @@ class CodexAgentView extends ItemView {
     return parts;
   }
 
-  private renderInlineMessageChip(parent: HTMLElement, chip: Pick<ContextChip, "id" | "kind" | "label" | "path">) {
+  private renderInlineMessageChip(parent: HTMLElement, chip: Pick<ContextChip, "id" | "kind" | "label" | "detail" | "path" | "text">) {
     const chipEl = parent.createSpan(`codex-agent-chip codex-agent-message-chip is-${chip.kind}`);
     chipEl.setAttr("title", chip.path ?? chip.label);
+    chipEl.setAttr("data-context-id", chip.id);
+    chipEl.setAttr("data-context-kind", chip.kind);
+    chipEl.setAttr("data-context-label", chip.label);
+    if (chip.detail) {
+      chipEl.setAttr("data-context-detail", chip.detail);
+    }
+    if (chip.path) {
+      chipEl.setAttr("data-context-path", chip.path);
+    }
+    if (chip.text) {
+      chipEl.setAttr("data-context-text", chip.text);
+    }
     const icon = chipEl.createSpan({ cls: `codex-agent-chip-icon is-${chip.kind}` });
     setIcon(icon, this.getContextChipIcon(chip));
     chipEl.createSpan({ cls: "codex-agent-chip-label", text: chip.label });
@@ -2613,6 +2656,152 @@ class CodexAgentView extends ItemView {
     } catch (error) {
       new Notice(`Copy failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  private async copyMessagePartsToClipboard(parts: TimelineMessagePart[], fallbackText: string) {
+    const normalized = this.normalizeMessageParts(parts);
+    const plainText = this.messagePartsToPlainText(normalized) || fallbackText;
+    try {
+      if (typeof ClipboardItem !== "undefined" && typeof navigator.clipboard.write === "function") {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/plain": new Blob([plainText], { type: "text/plain" }),
+            "text/html": new Blob([this.messagePartsToClipboardHtml(normalized)], { type: "text/html" })
+          })
+        ]);
+      } else {
+        await navigator.clipboard.writeText(plainText);
+      }
+      new Notice("Message copied.");
+    } catch (error) {
+      try {
+        await navigator.clipboard.writeText(plainText);
+        new Notice("Message copied.");
+      } catch {
+        new Notice(`Copy failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  private handleTimelineCopy(event: ClipboardEvent) {
+    if (!this.timelineContainer || !event.clipboardData) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return;
+    }
+
+    const parts: TimelineMessagePart[] = [];
+    for (let index = 0; index < selection.rangeCount; index += 1) {
+      const range = selection.getRangeAt(index);
+      const container = range.commonAncestorContainer;
+      if (!this.timelineContainer.contains(container)) {
+        continue;
+      }
+      parts.push(...this.extractMessagePartsFromNode(range.cloneContents()));
+    }
+    const normalized = this.normalizeMessageParts(parts);
+    if (!normalized.some((part) => part.type === "chip")) {
+      return;
+    }
+
+    event.preventDefault();
+    const json = JSON.stringify(normalized);
+    event.clipboardData.setData("text/plain", this.messagePartsToPlainText(normalized));
+    event.clipboardData.setData("text/html", this.messagePartsToClipboardHtml(normalized));
+    event.clipboardData.setData(CODEX_MESSAGE_PARTS_MIME, json);
+  }
+
+  private extractMessagePartsFromNode(node: Node): TimelineMessagePart[] {
+    const parts: TimelineMessagePart[] = [];
+    const addText = (text: string) => {
+      const clean = this.stripPromptControlText(text);
+      if (!clean) {
+        return;
+      }
+      const previous = parts[parts.length - 1];
+      if (previous?.type === "text") {
+        previous.text += clean;
+      } else {
+        parts.push({ type: "text", text: clean });
+      }
+    };
+    const walk = (current: Node) => {
+      if (current.nodeType === Node.TEXT_NODE) {
+        addText(current.textContent ?? "");
+        return;
+      }
+      if (current instanceof HTMLBRElement) {
+        addText("\n");
+        return;
+      }
+      if (!(current instanceof HTMLElement) && current.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) {
+        return;
+      }
+      if (current instanceof HTMLElement && current.hasClass("codex-agent-chip")) {
+        const chip = this.readContextChipFromElement(current);
+        if (chip) {
+          parts.push({ type: "chip", chip });
+        }
+        return;
+      }
+      current.childNodes.forEach(walk);
+    };
+    walk(node);
+    return parts;
+  }
+
+  private readContextChipFromElement(element: HTMLElement): Pick<ContextChip, "id" | "kind" | "label" | "detail" | "path" | "text"> | null {
+    const id = element.getAttribute("data-context-id");
+    const rawKind = element.getAttribute("data-context-kind");
+    const label = element.getAttribute("data-context-label")
+      ?? element.querySelector<HTMLElement>(".codex-agent-chip-label")?.innerText.trim();
+    if (!id || !rawKind || !label || !["selection", "file", "folder", "image", "skill"].includes(rawKind)) {
+      return null;
+    }
+    return {
+      id,
+      kind: rawKind as ContextChip["kind"],
+      label,
+      detail: element.getAttribute("data-context-detail") ?? "",
+      path: element.getAttribute("data-context-path") ?? undefined,
+      text: element.getAttribute("data-context-text") ?? undefined
+    };
+  }
+
+  private normalizeMessageParts(parts: TimelineMessagePart[]) {
+    const normalized: TimelineMessagePart[] = [];
+    parts.forEach((part) => {
+      if (part.type === "text") {
+        if (!part.text) {
+          return;
+        }
+        const previous = normalized[normalized.length - 1];
+        if (previous?.type === "text") {
+          previous.text += part.text;
+        } else {
+          normalized.push({ type: "text", text: part.text });
+        }
+        return;
+      }
+      normalized.push(part);
+    });
+    return normalized;
+  }
+
+  private messagePartsToPlainText(parts: TimelineMessagePart[]) {
+    return parts.map((part) => part.type === "text" ? part.text : part.chip.label).join("");
+  }
+
+  private messagePartsToClipboardHtml(parts: TimelineMessagePart[]) {
+    const wrapper = document.createElement("span");
+    const marker = document.createElement("span");
+    marker.setAttribute(CODEX_MESSAGE_PARTS_ATTR, encodeURIComponent(JSON.stringify(parts)));
+    marker.setAttribute("style", "display:none");
+    wrapper.appendChild(marker);
+    wrapper.appendChild(document.createTextNode(this.messagePartsToPlainText(parts)));
+    return wrapper.innerHTML;
   }
 
   private bindObsidianFileLinks(container: HTMLElement) {
@@ -2888,6 +3077,7 @@ class CodexAgentView extends ItemView {
       text: "Ask Codex anything. Use @ to attach files or folders, / to choose a skill..."
     });
     this.promptInput.addEventListener("input", () => {
+      this.normalizePromptLeadingChipLayout();
       this.updatePromptEmptyState();
       this.updatePromptPicker();
     });
@@ -2968,7 +3158,7 @@ class CodexAgentView extends ItemView {
   }
 
   private updateStickyUserPrompt() {
-    if (!this.owner.getSettings().stickyUserPrompts || !this.timelineContainer || !this.stickyUserPromptEl || !this.stickyUserPromptTextEl) {
+    if (!this.owner.getSettings().stickyUserPrompts || !this.timelineContainer || !this.stickyUserPromptEl || !this.stickyUserPromptContentEl) {
       return;
     }
 
@@ -2979,7 +3169,7 @@ class CodexAgentView extends ItemView {
       this.timelineContainer.querySelectorAll<HTMLElement>(".codex-agent-event.is-user[data-user-message-index]")
     );
     let activeIndex: number | null = null;
-    let activeBody = "";
+    let activeItem: TimelineItem | null = null;
 
     userRows.forEach((row) => {
       const rect = row.getBoundingClientRect();
@@ -2993,18 +3183,36 @@ class CodexAgentView extends ItemView {
         return;
       }
       activeIndex = index;
-      activeBody = item.body;
+      activeItem = item;
     });
 
-    if (activeIndex === null) {
+    if (activeIndex === null || !activeItem) {
       this.stickyUserPromptIndex = null;
       this.stickyUserPromptEl.removeClass("is-visible");
-      this.stickyUserPromptTextEl.setText("");
+      this.stickyUserPromptContentEl.empty();
+      return;
+    }
+
+    const stickyHeight = Math.max(this.stickyUserPromptEl.offsetHeight, 74);
+    const stickyBottom = containerRect.top + stickyHeight + 8;
+    const overlapsVisibleUserMessage = userRows.some((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.top < stickyBottom && rect.bottom > containerRect.top;
+    });
+    if (overlapsVisibleUserMessage) {
+      this.stickyUserPromptIndex = null;
+      this.stickyUserPromptEl.removeClass("is-visible");
+      this.stickyUserPromptContentEl.empty();
+      return;
+    }
+
+    if (this.stickyUserPromptIndex === activeIndex && this.stickyUserPromptEl.hasClass("is-visible")) {
       return;
     }
 
     this.stickyUserPromptIndex = activeIndex;
-    this.stickyUserPromptTextEl.setText(activeBody);
+    this.stickyUserPromptContentEl.empty();
+    this.renderUserMessageParts(this.stickyUserPromptContentEl, this.getTimelineMessageParts(activeItem));
     this.stickyUserPromptEl.addClass("is-visible");
   }
 
@@ -3042,20 +3250,34 @@ class CodexAgentView extends ItemView {
       return;
     }
     const session = this.getActiveSession();
+    const input = session.tokenUsageInput;
     const total = session.tokenUsageTotal;
     const limit = session.tokenUsageLimit;
     this.tokenUsageEl.empty();
-    if (typeof total !== "number") {
-      this.tokenUsageEl.createSpan({ cls: "codex-agent-token-label", text: "Current conversation context: waiting for token usage" });
+    if (typeof input !== "number") {
+      this.tokenUsageEl.createSpan({ cls: "codex-agent-token-label", text: "Context: waiting for Codex" });
       return;
     }
-    const label = this.tokenUsageEl.createSpan({
-      cls: "codex-agent-token-label",
-      text: `Total token usage: ${this.formatTokenCount(total)}`
-    });
     if (typeof limit === "number" && limit > 0) {
-      label.setText(`Total token usage: ${this.formatTokenCount(total)} · model context window: ${this.formatTokenCount(limit)}`);
+      const percent = Math.min(100, Math.max(0, Math.round((input / limit) * 100)));
+      const ring = this.tokenUsageEl.createSpan("codex-agent-token-ring");
+      ring.style.setProperty("--codex-token-percent", `${percent}%`);
+      ring.setAttr(
+        "title",
+        "Codex reported last turn input tokens. Includes conversation, instructions, attachments, and current prompt. Total token usage is cumulative and not used for this ratio."
+      );
+      this.tokenUsageEl.createSpan({
+        cls: "codex-agent-token-label",
+        text: `Context ${percent}% · ${this.formatTokenCount(input)} / ${this.formatTokenCount(limit)}`
+      });
+      return;
     }
+    this.tokenUsageEl.createSpan({
+      cls: "codex-agent-token-label",
+      text: typeof total === "number"
+        ? `Context input: ${this.formatTokenCount(input)} · total tokens ${this.formatTokenCount(total)}`
+        : `Context input: ${this.formatTokenCount(input)}`
+    });
   }
 
   private formatTokenCount(value: number) {
@@ -3299,18 +3521,30 @@ class CodexAgentView extends ItemView {
     return `${kind}:${target}:${Date.now()}:${Math.floor(Math.random() * 100000)}`;
   }
 
-  private insertChipElement(chip: Pick<ContextChip, "id" | "kind" | "label" | "path">) {
+  private insertChipElement(chip: ContextChip) {
     if (!this.promptInput) {
       return;
     }
 
+    this.insertNodeAtPromptCaret(this.createPromptChipElement(chip));
+    this.updatePromptEmptyState();
+  }
+
+  private createPromptChipElement(chip: ContextChip) {
     const chipEl = document.createElement("span");
     chipEl.addClass("codex-agent-chip", `is-${chip.kind}`);
     chipEl.setAttr("contenteditable", "false");
     chipEl.setAttr("data-context-id", chip.id);
     chipEl.setAttr("data-context-kind", chip.kind);
+    chipEl.setAttr("data-context-label", chip.label);
+    if (chip.detail) {
+      chipEl.setAttr("data-context-detail", chip.detail);
+    }
     if (chip.path) {
       chipEl.setAttr("data-context-path", chip.path);
+    }
+    if (chip.text) {
+      chipEl.setAttr("data-context-text", chip.text);
     }
     const icon = chipEl.createSpan({ cls: `codex-agent-chip-icon is-${chip.kind}` });
     setIcon(icon, this.getContextChipIcon(chip));
@@ -3329,9 +3563,7 @@ class CodexAgentView extends ItemView {
       chipEl.remove();
       this.updatePromptEmptyState();
     });
-
-    this.insertNodeAtPromptCaret(chipEl);
-    this.updatePromptEmptyState();
+    return chipEl;
   }
 
   private getContextChipIcon(chip: Pick<ContextChip, "kind" | "path" | "label">) {
@@ -3402,6 +3634,52 @@ class CodexAgentView extends ItemView {
     this.promptInput.focus();
   }
 
+  private normalizePromptLeadingChipLayout() {
+    if (!this.promptInput || !this.promptInput.querySelector(".codex-agent-chip")) {
+      return;
+    }
+
+    let firstChip: HTMLElement | null = null;
+    const walker = document.createTreeWalker(this.promptInput, NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node instanceof HTMLElement && node.hasClass("codex-agent-chip")) {
+        firstChip = node;
+        break;
+      }
+    }
+    if (!firstChip) {
+      return;
+    }
+
+    const removable: Node[] = [];
+    for (const node of Array.from(this.promptInput.childNodes)) {
+      if (node === firstChip || (node instanceof HTMLElement && node.contains(firstChip))) {
+        break;
+      }
+      if (!this.isEmptyPromptLeadNode(node)) {
+        return;
+      }
+      removable.push(node);
+    }
+    removable.forEach((node) => node.parentNode?.removeChild(node));
+  }
+
+  private isEmptyPromptLeadNode(node: Node): boolean {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return this.stripPromptControlText(node.textContent ?? "").trim().length === 0;
+    }
+    if (node instanceof HTMLBRElement) {
+      return true;
+    }
+    if (node instanceof HTMLElement) {
+      const clone = node.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll(".codex-agent-chip").forEach((chip) => chip.remove());
+      return this.stripPromptControlText(clone.innerText ?? clone.textContent ?? "").trim().length === 0;
+    }
+    return false;
+  }
+
   private stripPromptControlText(text: string) {
     return text.replace(/\u200B/g, "");
   }
@@ -3436,6 +3714,55 @@ class CodexAgentView extends ItemView {
     this.promptInput.focus();
   }
 
+  private insertMessagePartsAtPromptCaret(parts: TimelineMessagePart[]) {
+    if (!this.promptInput || parts.length === 0) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    const hasPromptSelection = selection
+      && selection.rangeCount > 0
+      && this.promptInput.contains(selection.getRangeAt(0).commonAncestorContainer);
+    const range = hasPromptSelection
+      ? selection!.getRangeAt(0)
+      : document.createRange();
+
+    if (!hasPromptSelection) {
+      range.selectNodeContents(this.promptInput);
+      range.collapse(false);
+    }
+
+    const fragment = document.createDocumentFragment();
+    const pastedChips: ContextChip[] = [];
+    parts.forEach((part) => {
+      if (part.type === "text") {
+        fragment.appendChild(document.createTextNode(part.text));
+        return;
+      }
+      const chip: ContextChip = {
+        id: this.makeContextChipId(part.chip.kind, part.chip.path ?? part.chip.label),
+        kind: part.chip.kind,
+        label: part.chip.label,
+        detail: part.chip.detail,
+        path: part.chip.path,
+        text: part.chip.text
+      };
+      pastedChips.push(chip);
+      fragment.appendChild(this.createPromptChipElement(chip));
+    });
+    const after = document.createTextNode("\u200B");
+    fragment.appendChild(after);
+
+    range.deleteContents();
+    range.insertNode(fragment);
+    range.setStartAfter(after);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    this.contextChips = [...pastedChips, ...this.contextChips];
+    this.promptInput.focus();
+  }
+
   private getClipboardText(clipboardData: DataTransfer | null) {
     if (!clipboardData) {
       return "";
@@ -3448,6 +3775,62 @@ class CodexAgentView extends ItemView {
     }
 
     return this.convertClipboardHtmlToPlainText(html) || plainText;
+  }
+
+  private getClipboardMessageParts(clipboardData: DataTransfer | null): TimelineMessagePart[] {
+    if (!clipboardData) {
+      return [];
+    }
+
+    const custom = clipboardData.getData(CODEX_MESSAGE_PARTS_MIME);
+    const fromCustom = this.parseClipboardMessageParts(custom);
+    if (fromCustom.length > 0) {
+      return fromCustom;
+    }
+
+    const html = clipboardData.getData("text/html");
+    if (!html.trim()) {
+      return [];
+    }
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const marker = template.content.querySelector<HTMLElement>(`[${CODEX_MESSAGE_PARTS_ATTR}]`);
+    return this.parseClipboardMessageParts(marker?.getAttribute(CODEX_MESSAGE_PARTS_ATTR) ?? "", true);
+  }
+
+  private parseClipboardMessageParts(raw: string, encoded = false): TimelineMessagePart[] {
+    if (!raw.trim()) {
+      return [];
+    }
+    try {
+      const value = encoded ? decodeURIComponent(raw) : raw;
+      const parsed = JSON.parse(value);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      const parts = parsed.map((part: any): TimelineMessagePart | null => {
+        if (part?.type === "text" && typeof part.text === "string") {
+          return { type: "text" as const, text: part.text };
+        }
+        if (part?.type === "chip" && typeof part.chip?.label === "string" && ["selection", "file", "folder", "image", "skill"].includes(part.chip.kind)) {
+          return {
+            type: "chip" as const,
+            chip: {
+              id: typeof part.chip.id === "string" ? part.chip.id : this.makeContextChipId(part.chip.kind, part.chip.path ?? part.chip.label),
+              kind: part.chip.kind as ContextChip["kind"],
+              label: part.chip.label,
+              detail: typeof part.chip.detail === "string" ? part.chip.detail : "",
+              path: typeof part.chip.path === "string" ? part.chip.path : undefined,
+              text: typeof part.chip.text === "string" ? part.chip.text : undefined
+            }
+          };
+        }
+        return null;
+      }).filter((part: TimelineMessagePart | null): part is TimelineMessagePart => part !== null);
+      return this.normalizeMessageParts(parts);
+    } catch {
+      return [];
+    }
   }
 
   private convertClipboardHtmlToPlainText(html: string) {
@@ -3536,6 +3919,16 @@ class CodexAgentView extends ItemView {
   }
 
   private handlePromptPaste(event: ClipboardEvent) {
+    const messageParts = this.getClipboardMessageParts(event.clipboardData);
+    if (messageParts.length > 0) {
+      event.preventDefault();
+      this.insertMessagePartsAtPromptCaret(messageParts);
+      this.normalizePromptLeadingChipLayout();
+      this.updatePromptEmptyState();
+      this.updatePromptPicker();
+      return;
+    }
+
     const fileMap = new Map<string, File>();
     Array.from(event.clipboardData?.files ?? [])
       .filter((file) => file.type.startsWith("image/"))
@@ -3920,6 +4313,9 @@ class CodexAgentView extends ItemView {
         return `${item.kind}: ${item.path}`;
       }).join("; ")
       : "no attached context";
+    this.currentRunMetaDetail = this.formatRunMetaDetail();
+    const contextStatusDetail = attached > 0 ? `Read ${attached} context items: ${summary}` : "No context attached";
+    const initialStatusBody = this.formatRunStatusBody(contextStatusDetail);
 
     const session = this.getActiveSession();
     if (!this.hasStartedConversation(session)) {
@@ -3936,20 +4332,22 @@ class CodexAgentView extends ItemView {
           id: item.id,
           kind: item.kind,
           label: item.label,
-          path: item.path
+          detail: item.path ?? item.label,
+          path: item.path,
+          text: item.text
         })),
         messageParts
       },
       {
         title: "Thinking",
-        body: attached > 0 ? `Read ${attached} context items: ${summary}` : "No context attached",
+        body: initialStatusBody,
         tone: "status"
       }
     ];
     session.statusItemIndex = session.timeline.length - 1;
     session.runStartedAt = Date.now();
     this.currentRunStatusTitle = "Thinking";
-    this.currentRunStatusBody = attached > 0 ? `Read ${attached} context items: ${summary}` : "No context attached";
+    this.currentRunStatusBody = initialStatusBody;
     this.runningSessionId = session.id;
     this.isCancellingRun = false;
     this.activeResponseItemId = null;
@@ -4069,7 +4467,9 @@ class CodexAgentView extends ItemView {
           id,
           kind: normalizedKind ?? "file",
           label: chip?.label ?? label ?? "Context",
-          path: chip?.path ?? element.getAttribute("data-context-path") ?? undefined
+          detail: chip?.detail ?? element.getAttribute("data-context-detail") ?? "",
+          path: chip?.path ?? element.getAttribute("data-context-path") ?? undefined,
+          text: chip?.text ?? element.getAttribute("data-context-text") ?? undefined
         }
       });
     };
@@ -4312,6 +4712,7 @@ class CodexAgentView extends ItemView {
     if (event.type === "token_usage") {
       const session = this.getTargetSession();
       session.tokenUsageTotal = event.totalTokens;
+      session.tokenUsageInput = typeof event.inputTokens === "number" ? event.inputTokens : session.tokenUsageInput;
       session.tokenUsageLimit = typeof event.modelContextWindow === "number" ? event.modelContextWindow : null;
       session.updatedAt = Date.now();
       this.persistSessions();
@@ -5065,8 +5466,16 @@ class CodexAgentView extends ItemView {
 
   private updateWorkingTranscriptStatus(title: string, body = "") {
     this.currentRunStatusTitle = title;
-    this.currentRunStatusBody = body;
-    this.updateTranscriptStatus(title, body);
+    this.currentRunStatusBody = this.formatRunStatusBody(body);
+    this.updateTranscriptStatus(title, this.currentRunStatusBody);
+  }
+
+  private formatRunMetaDetail() {
+    return `${this.modelChoice} · ${this.reasoningLevel} reason`;
+  }
+
+  private formatRunStatusBody(detail = "") {
+    return [this.currentRunMetaDetail, detail].filter(Boolean).join("\n");
   }
 
   private getProcessedStatusTitle() {

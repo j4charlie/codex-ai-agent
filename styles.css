@@ -23,6 +23,8 @@
   --codex-faint: rgba(128, 128, 128, 0.12);
   --codex-faint-strong: rgba(128, 128, 128, 0.18);
   --codex-input-bg: var(--background-primary);
+  --codex-user-bg: rgba(139, 183, 255, 0.1);
+  --codex-user-sticky-bg: color-mix(in srgb, var(--background-primary) 90%, rgb(139, 183, 255) 10%);
   --codex-chat-font-size: 15px;
   display: flex;
   flex-direction: column;
@@ -571,34 +573,28 @@
   min-height: 34px;
   max-height: 74px;
   margin: 0;
-  padding: 6px 10px;
-  border: 1px solid rgba(139, 183, 255, 0.35);
-  border-radius: 6px;
-  background: var(--codex-panel);
-  box-shadow: none;
-  color: var(--codex-text);
-  text-align: left;
   cursor: pointer;
+  overflow: hidden;
+  background: var(--codex-bg);
 }
 
 .codex-agent-sticky-user-prompt.is-visible {
   display: block;
 }
 
-.codex-agent-sticky-user-prompt:hover {
-  border-color: rgba(139, 183, 255, 0.55);
-  background: var(--codex-panel-2);
+.codex-agent-sticky-user-content {
+  overflow: hidden;
 }
 
-.codex-agent-sticky-user-text {
+.codex-agent-sticky-user-row {
+  margin: 0;
+}
+
+.codex-agent-sticky-user-content .codex-agent-user-message-inline {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  color: var(--codex-text);
-  font-size: var(--codex-chat-font-size);
-  font-weight: 650;
-  line-height: 1.6;
 }
 
 .codex-agent-event {
@@ -606,12 +602,36 @@
 }
 
 .codex-agent-event.is-user .codex-agent-event-content {
+  padding: 8px 10px;
+  border: 1px solid rgba(139, 183, 255, 0.35);
+  border-radius: 7px;
+  border-color: rgba(139, 183, 255, 0.35);
+  background: var(--codex-user-bg);
+  color: var(--codex-text);
+}
+
+.codex-agent-sticky-user-prompt .codex-agent-event-content {
+  background: var(--codex-user-sticky-bg);
+}
+
+.codex-agent-sticky-user-prompt:hover .codex-agent-event-content,
+.codex-agent-sticky-user-prompt:focus-visible .codex-agent-event-content,
+.codex-agent-sticky-user-prompt:active .codex-agent-event-content {
+  border-color: rgba(139, 183, 255, 0.35);
+  background: var(--codex-user-sticky-bg);
+  color: var(--codex-text);
+  opacity: 1;
+}
+
+.codex-agent-sticky-user-prompt {
+  width: auto;
+  max-width: none;
+}
+
+.codex-agent-event.is-user .codex-agent-event-content {
   width: 100%;
   max-width: 100%;
   margin-left: 0;
-  padding: 8px 10px;
-  border-color: rgba(139, 183, 255, 0.35);
-  background: rgba(139, 183, 255, 0.1);
 }
 
 .codex-agent-event.is-user .codex-agent-event-content,
@@ -626,9 +646,12 @@
   vertical-align: 0.08em;
 }
 
+.codex-agent-sticky-user-prompt .codex-agent-user-message-inline,
 .codex-agent-event.is-user .codex-agent-event-content p {
+  margin: 0;
   color: var(--codex-text);
   font-size: var(--codex-chat-font-size);
+  font-weight: 400;
   line-height: 1.6;
 }
 
@@ -1550,29 +1573,20 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
   border-radius: 999px;
   background:
-    conic-gradient(var(--codex-green) var(--codex-token-percent), rgba(220, 226, 235, 0.16) 0),
-    rgba(255, 255, 255, 0.04);
-  color: var(--codex-muted);
-  font-size: 8px;
-  font-weight: 700;
+    conic-gradient(rgba(238, 241, 244, 0.68) var(--codex-token-percent), rgba(238, 241, 244, 0.22) 0),
+    transparent;
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 0);
+  opacity: 0.85;
 }
 
 .codex-agent-token-ring::before {
-  content: "";
-  position: absolute;
-  inset: 4px;
-  border-radius: inherit;
-  background: var(--codex-bg);
-}
-
-.codex-agent-token-ring span {
-  position: relative;
-  z-index: 1;
+  content: none;
 }
 
 .codex-agent-live-diff {
@@ -1849,11 +1863,6 @@
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
 }
 
-.theme-light .codex-agent-sticky-user-prompt {
-  background: var(--codex-panel);
-  box-shadow: none;
-}
-
 .theme-light .codex-agent-prompt-picker {
   border-color: rgba(31, 35, 40, 0.14);
   background: var(--codex-panel);
@@ -1891,6 +1900,13 @@
 .theme-light .codex-agent-event.is-user .codex-agent-event-content,
 .theme-light .codex-agent-chip {
   background: rgba(77, 124, 255, 0.1);
+}
+
+.theme-light .codex-agent-sticky-user-prompt .codex-agent-event-content,
+.theme-light .codex-agent-sticky-user-prompt:hover .codex-agent-event-content,
+.theme-light .codex-agent-sticky-user-prompt:focus-visible .codex-agent-event-content,
+.theme-light .codex-agent-sticky-user-prompt:active .codex-agent-event-content {
+  background: color-mix(in srgb, var(--background-primary) 90%, rgb(77, 124, 255) 10%);
 }
 
 .theme-light .codex-agent-event.is-tool .codex-agent-event-content p,
