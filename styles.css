@@ -1889,6 +1889,10 @@
   color: rgba(31, 35, 40, 0.56);
 }
 
+.theme-light .codex-agent-prompt-placeholder {
+  color: rgba(31, 35, 40, 0.54);
+}
+
 .theme-light .codex-agent-approval-choice-shell {
   background: rgba(0, 0, 0, 0.025);
 }
@@ -1910,12 +1914,29 @@
 }
 
 .theme-light .codex-agent-event.is-tool .codex-agent-event-content p,
+.theme-light .codex-agent-event.is-status .codex-agent-event-content p,
+.theme-light .codex-agent-event-content p,
+.theme-light .codex-agent-approval-choice-detail,
+.theme-light .codex-agent-aux-mode-detail,
+.theme-light .codex-agent-muted,
 .theme-light .codex-agent-command-list,
 .theme-light .codex-agent-read-list,
 .theme-light .codex-agent-plan-list,
 .theme-light .codex-agent-token-usage,
 .theme-light .codex-agent-live-diff {
-  color: var(--text-muted);
+  color: rgba(31, 35, 40, 0.68);
+}
+
+.theme-light .codex-agent-event.is-status .codex-agent-event-content h4 {
+  color: rgba(31, 35, 40, 0.72);
+}
+
+.theme-light .codex-agent-event.is-status:not(.is-processed) .codex-agent-event-content h4 {
+  background: linear-gradient(100deg, rgba(31, 35, 40, 0.68) 0%, rgba(31, 35, 40, 0.68) 32%, rgba(31, 35, 40, 0.92) 48%, var(--codex-blue) 56%, rgba(31, 35, 40, 0.68) 72%, rgba(31, 35, 40, 0.68) 100%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .theme-light .codex-agent-event-content,

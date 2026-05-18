@@ -27,7 +27,7 @@ const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 const DEFAULT_CODEX_BIN = "codex";
 const PLUGIN_ID = "codex-ai-agent";
 const PLUGIN_NAME = "Codex AI Agent";
-const PLUGIN_VERSION = "0.1.5";
+const PLUGIN_VERSION = "0.1.6";
 const GITHUB_URL = "https://github.com/j4charlie/codex-ai-agent";
 const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues`;
 const CODEX_MESSAGE_PARTS_MIME = "application/x-codex-agent-message-parts";
@@ -613,10 +613,22 @@ class AppServerAdapter implements CodexAdapter {
     if (request.threadId) {
       this.sendRequest("thread/resume", { threadId: request.threadId }, (message) => {
         if (message.error) {
+          const errorMessage = this.describeError(message.error);
+          if (this.isMissingRolloutError(errorMessage)) {
+            onEvent({
+              type: "status",
+              state: "thinking",
+              title: "Thinking",
+              detail: "Previous Codex thread is no longer resumable. Starting a new thread."
+            });
+            this.currentThreadId = undefined;
+            this.startThreadOrTurn({ ...request, threadId: undefined }, onEvent, onClose);
+            return;
+          }
           onEvent({
             type: "error",
             title: "Codex thread resume failed",
-            message: this.describeError(message.error)
+            message: errorMessage
           });
           this.finish(onClose, 1);
           return;
@@ -1199,6 +1211,11 @@ class AppServerAdapter implements CodexAdapter {
       return error.message;
     }
     return JSON.stringify(error).slice(0, 1000);
+  }
+
+  private isMissingRolloutError(message: string) {
+    const normalized = message.toLowerCase();
+    return normalized.includes("no rollout found") || normalized.includes("rollout not found");
   }
 
   private toSandboxPolicy(mode: string, cwd: string) {
@@ -3005,10 +3022,8 @@ class CodexAgentView extends ItemView {
         }
         row.addEventListener("click", () => {
           selectedIndex = index;
-          renderChoices();
-          shell.focus();
+          this.resolveApproval(approval.id, choice.key);
         });
-        row.addEventListener("dblclick", () => this.resolveApproval(approval.id, choice.key));
       });
     };
 
@@ -3038,7 +3053,7 @@ class CodexAgentView extends ItemView {
         if (choices[index]) {
           event.preventDefault();
           selectedIndex = index;
-          renderChoices();
+          this.resolveApproval(approval.id, choices[index].key);
         }
       }
     });
@@ -4285,11 +4300,7 @@ class CodexAgentView extends ItemView {
       this.activeResponseItemIndex = null;
       this.currentDiffStats = null;
       this.renderLiveDiff();
-      this.appendTimelineItem({
-        title: "Stopped",
-        body: "Codex process was stopped by the user.",
-        tone: "command"
-      });
+      this.finishRunStatus("Stopped", "Codex process was stopped by the user.");
       this.runningSessionId = null;
       return;
     }
@@ -5440,6 +5451,7 @@ class CodexAgentView extends ItemView {
       this.stopElapsedTimer();
       this.currentDiffStats = null;
       this.renderLiveDiff();
+      this.finishRunStatus("Stopped", "Codex process was stopped by the user.");
       this.persistSessions();
       return;
     }
@@ -5453,15 +5465,17 @@ class CodexAgentView extends ItemView {
     this.markActiveResponseComplete();
     this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "Completed" : "Run failed");
     if (code !== 0) {
-      this.appendTimelineItem({
-        title: "Run failed",
-        body: `Codex exited with code ${code ?? "unknown"}.`,
-        tone: "command"
-      });
+      this.finishRunStatus("Run failed", `Codex exited with code ${code ?? "unknown"}.`);
     } else {
       this.updateTranscriptStatus(this.getProcessedStatusTitle(), "");
     }
     this.persistSessions();
+  }
+
+  private finishRunStatus(title: string, body = "") {
+    this.currentRunStatusTitle = title;
+    this.currentRunStatusBody = body;
+    this.updateTranscriptStatus(title, body);
   }
 
   private updateWorkingTranscriptStatus(title: string, body = "") {
