@@ -204,6 +204,20 @@
   color: var(--codex-text);
 }
 
+.codex-agent-tab.is-running .codex-agent-tab-icon {
+  color: var(--interactive-accent);
+}
+
+.codex-agent-tab.is-running .codex-agent-tab-icon svg {
+  animation: codex-agent-tab-spin 1s linear infinite;
+}
+
+@keyframes codex-agent-tab-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .codex-agent-tab-alert-dot {
   position: absolute;
   top: -4px;

@@ -30,7 +30,7 @@ const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 const DEFAULT_CODEX_BIN = "codex";
 const PLUGIN_ID = "codex-ai-agent";
 const PLUGIN_NAME = "Codex AI Agent";
-const PLUGIN_VERSION = "0.1.7";
+const PLUGIN_VERSION = "0.1.8";
 const AGENT_DATA_DIR_NAME = ".codexaiagent";
 const LEGACY_AGENT_DATA_DIR_NAMES = [".codeaiagent"];
 const AGENT_DATA_FILE_NAME = "data.json";
@@ -65,6 +65,7 @@ const DEFAULT_SETTINGS: AgentPluginSettings = {
   diffLineNumbers: true,
   enableDiffReview: true,
   enableGitManagement: true,
+  language: "en",
   pastedImageBehavior: "chip",
   chatViewLocation: "right-pane",
   chatFontSize: 15
@@ -101,6 +102,7 @@ type ModelChoice = "GPT-5.5" | "GPT-5.4" | "GPT-5.4 Mini" | "GPT-5.3 Codex";
 type AdapterMode = "app-server" | "exec-json" | "pty";
 type ExternalPathAccess = "ask-each-time" | "allow-session" | "deny";
 type ChatViewLocation = "right-pane" | "left-pane" | "new-leaf";
+type AppLanguage = "zh" | "en";
 type TurnAuxMode = "auto" | "plan" | "confirm-first" | "mirror-not-echo" | "deep-questions";
 type GitReviewSection = "review" | "stage" | "commit" | "history";
 type DiffReviewFilter = "active" | "accepted" | "rejected" | "all";
@@ -124,6 +126,7 @@ interface AgentPluginSettings {
   diffLineNumbers: boolean;
   enableDiffReview: boolean;
   enableGitManagement: boolean;
+  language: AppLanguage;
   pastedImageBehavior: "chip";
   chatViewLocation: ChatViewLocation;
   chatFontSize: number;
@@ -541,6 +544,7 @@ interface AgentSession {
   codexThreadId?: string;
   title: string;
   timeline: TimelineItem[];
+  draftMessageParts?: TimelineMessagePart[];
   tokenUsageTotal?: number;
   tokenUsageInput?: number;
   tokenUsageLimit?: number | null;
@@ -560,6 +564,19 @@ interface AgentPluginData {
 }
 
 type AgentRuntimeState = "idle" | "thinking" | "running" | "done" | "error";
+
+interface AgentRunState {
+  runId: string;
+  handle: AgentRunHandle;
+  isCancelling: boolean;
+  activeResponseItemId: string | null;
+  activeResponseItemIndex: number | null;
+  exploredFiles: Set<string>;
+  currentDiffStats: any;
+  statusTitle: string;
+  statusBody: string;
+  metaDetail: string;
+}
 
 type AgentEvent =
   | { type: "status"; state: AgentRuntimeState; title: string; detail?: string }
@@ -1712,6 +1729,10 @@ export default class CodexForObsidianPlugin extends Plugin {
     return { ...this.agentData.settings };
   }
 
+  tr(zh: string, en: string) {
+    return this.agentData.settings.language === "zh" ? zh : en;
+  }
+
   getDiffReviewState(): DiffReviewPersistedState {
     return this.cloneDiffReviewState(this.agentData.diffReviewState);
   }
@@ -2077,6 +2098,7 @@ export default class CodexForObsidianPlugin extends Plugin {
       diffLineNumbers: typeof settings?.diffLineNumbers === "boolean" ? settings.diffLineNumbers : DEFAULT_SETTINGS.diffLineNumbers,
       enableDiffReview: typeof settings?.enableDiffReview === "boolean" ? settings.enableDiffReview : DEFAULT_SETTINGS.enableDiffReview,
       enableGitManagement: typeof settings?.enableGitManagement === "boolean" ? settings.enableGitManagement : DEFAULT_SETTINGS.enableGitManagement,
+      language: ["zh", "en"].includes(settings?.language) ? settings.language : DEFAULT_SETTINGS.language,
       pastedImageBehavior: "chip",
       chatViewLocation: ["right-pane", "left-pane", "new-leaf"].includes(settings?.chatViewLocation) ? settings.chatViewLocation : DEFAULT_SETTINGS.chatViewLocation,
       chatFontSize: this.normalizeRangedInteger(settings?.chatFontSize, DEFAULT_SETTINGS.chatFontSize, 13, 20)
@@ -2121,6 +2143,9 @@ export default class CodexForObsidianPlugin extends Plugin {
       id: session.id,
       codexThreadId: typeof session.codexThreadId === "string" ? session.codexThreadId : undefined,
       title: typeof session.title === "string" ? session.title : "New Agent",
+      draftMessageParts: Array.isArray(session.draftMessageParts)
+        ? this.normalizeMessageParts(session.draftMessageParts)
+        : undefined,
       tokenUsageTotal: typeof session.tokenUsageTotal === "number" ? session.tokenUsageTotal : undefined,
       tokenUsageInput: typeof session.tokenUsageInput === "number" ? session.tokenUsageInput : undefined,
       tokenUsageLimit: typeof session.tokenUsageLimit === "number" ? session.tokenUsageLimit : null,
@@ -2144,27 +2169,7 @@ export default class CodexForObsidianPlugin extends Plugin {
                 }))
               : undefined,
             messageParts: Array.isArray(item.messageParts)
-              ? item.messageParts
-                .map((part: any) => {
-                  if (part?.type === "text" && typeof part.text === "string") {
-                    return { type: "text" as const, text: part.text };
-                  }
-                  if (part?.type === "chip" && typeof part.chip?.id === "string" && typeof part.chip?.label === "string") {
-                    return {
-                      type: "chip" as const,
-                      chip: {
-                        id: part.chip.id,
-                        kind: ["selection", "file", "folder", "image", "skill"].includes(part.chip.kind) ? part.chip.kind : "file",
-                        label: part.chip.label,
-                        detail: typeof part.chip.detail === "string" ? part.chip.detail : part.chip.path ?? part.chip.label,
-                        path: typeof part.chip.path === "string" ? part.chip.path : undefined,
-                        text: typeof part.chip.text === "string" ? part.chip.text : undefined
-                      }
-                    };
-                  }
-                  return null;
-                })
-                .filter((part: TimelineMessagePart | null): part is TimelineMessagePart => part !== null)
+              ? this.normalizeMessageParts(item.messageParts)
               : undefined,
             approvalId: typeof item.approvalId === "string" ? item.approvalId : undefined,
             toolItemId: typeof item.toolItemId === "string" ? item.toolItemId : undefined,
@@ -2200,6 +2205,30 @@ export default class CodexForObsidianPlugin extends Plugin {
       updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : now,
       closedAt: typeof session.closedAt === "number" ? session.closedAt : undefined
     };
+  }
+
+  private normalizeMessageParts(parts: any[]): TimelineMessagePart[] {
+    const normalized: TimelineMessagePart[] = [];
+    parts.forEach((part: any) => {
+      if (part?.type === "text" && typeof part.text === "string") {
+        normalized.push({ type: "text", text: part.text });
+        return;
+      }
+      if (part?.type === "chip" && typeof part.chip?.id === "string" && typeof part.chip?.label === "string") {
+        normalized.push({
+          type: "chip",
+          chip: {
+            id: part.chip.id,
+            kind: ["selection", "file", "folder", "image", "skill"].includes(part.chip.kind) ? part.chip.kind : "file",
+            label: part.chip.label,
+            detail: typeof part.chip.detail === "string" ? part.chip.detail : part.chip.path ?? part.chip.label,
+            path: typeof part.chip.path === "string" ? part.chip.path : undefined,
+            text: typeof part.chip.text === "string" ? part.chip.text : undefined
+          }
+        });
+      }
+    });
+    return normalized;
   }
 
   private async activateView(): Promise<CodexAgentView | null> {
@@ -2284,6 +2313,10 @@ class CodexAgentSettingTab extends PluginSettingTab {
     super(app, owner);
   }
 
+  private tr(zh: string, en: string) {
+    return this.owner.tr(zh, en);
+  }
+
   display() {
     const { containerEl } = this;
     const settings = this.owner.getSettings();
@@ -2322,37 +2355,37 @@ class CodexAgentSettingTab extends PluginSettingTab {
   }
 
   private renderSetup(containerEl: HTMLElement, settings: AgentPluginSettings) {
-    containerEl.createEl("h3", { text: "Setup" });
+    containerEl.createEl("h3", { text: this.tr("设置", "Setup") });
     const status = containerEl.createDiv("codex-agent-settings-status");
     this.setupStatusEl = status;
     this.renderSetupStatus("idle", "Codex status has not been checked yet.", "Click Check Codex to verify your local Codex CLI.");
 
     new Setting(containerEl)
       .setName("Codex")
-      .setDesc("Check whether Obsidian can find and run the local Codex CLI.")
+      .setDesc(this.tr("检查 Obsidian 是否能找到并运行本地 Codex CLI。", "Check whether Obsidian can find and run the local Codex CLI."))
       .addButton((button) => button
-        .setButtonText("Check Codex")
+        .setButtonText(this.tr("检查 Codex", "Check Codex"))
         .setCta()
         .onClick(() => this.checkCodex(this.owner.getSettings().codexBin || DEFAULT_CODEX_BIN)))
       .addButton((button) => button
-        .setButtonText("Try common locations")
+        .setButtonText(this.tr("尝试常见路径", "Try common locations"))
         .onClick(() => this.tryCommonCodexLocations()))
       .addButton((button) => button
-        .setButtonText("Open Agent")
+        .setButtonText(this.tr("打开 Agent", "Open Agent"))
         .onClick(() => this.owner.openAgentView()));
   }
 
   private renderRuntime(containerEl: HTMLElement, settings: AgentPluginSettings) {
-    containerEl.createEl("h3", { text: "Runtime" });
+    containerEl.createEl("h3", { text: this.tr("运行时", "Runtime") });
     new Setting(containerEl)
-      .setName("Codex CLI path")
-      .setDesc("Path to the Codex executable. Usually auto-detected. If Obsidian cannot find Codex, enter an absolute path.")
+      .setName(this.tr("Codex CLI 路径", "Codex CLI path"))
+      .setDesc(this.tr("Codex 可执行文件路径。通常会自动检测；如果 Obsidian 找不到 Codex，请填写绝对路径。", "Path to the Codex executable. Usually auto-detected. If Obsidian cannot find Codex, enter an absolute path."))
       .addText((text) => text
         .setPlaceholder(DEFAULT_CODEX_BIN)
         .setValue(settings.codexBin)
         .onChange(async (value) => this.update({ codexBin: value.trim() || DEFAULT_CODEX_BIN })))
       .addButton((button) => button
-        .setButtonText("Reset to default")
+        .setButtonText(this.tr("重置默认", "Reset to default"))
         .onClick(async () => {
           await this.update({ codexBin: DEFAULT_CODEX_BIN });
           this.display();
@@ -2362,8 +2395,8 @@ class CodexAgentSettingTab extends PluginSettingTab {
         .onClick(() => this.testCommand(this.owner.getSettings().codexBin || DEFAULT_CODEX_BIN, ["--version"], "Codex CLI")));
 
     new Setting(containerEl)
-      .setName("Node.js path")
-      .setDesc("Usually leave blank. Only set this if an npm-installed Codex depends on a specific Node binary, or Obsidian cannot find node in the GUI environment.")
+      .setName(this.tr("Node.js 路径", "Node.js path"))
+      .setDesc(this.tr("通常留空。仅当 Codex 依赖指定 Node，或 Obsidian 图形环境找不到 node 时设置。", "Usually leave blank. Only set this if an npm-installed Codex depends on a specific Node binary, or Obsidian cannot find node in the GUI environment."))
       .addText((text) => text
         .setPlaceholder("/usr/local/bin/node")
         .setValue(settings.nodeBin)
@@ -2380,8 +2413,8 @@ class CodexAgentSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName("Execution backend")
-      .setDesc("Uses App Server by default. Exec JSON is only a compatibility fallback.")
+      .setName(this.tr("执行后端", "Execution backend"))
+      .setDesc(this.tr("默认使用 App Server。Exec JSON 仅作为兼容回退。", "Uses App Server by default. Exec JSON is only a compatibility fallback."))
       .addDropdown((dropdown) => dropdown
         .addOption("app-server", "App Server")
         .addOption("exec-json", "Exec JSON fallback")
@@ -2390,10 +2423,22 @@ class CodexAgentSettingTab extends PluginSettingTab {
   }
 
   private renderDefaults(containerEl: HTMLElement, settings: AgentPluginSettings) {
-    containerEl.createEl("h3", { text: "Defaults" });
+    containerEl.createEl("h3", { text: this.tr("默认设置", "Defaults") });
     new Setting(containerEl)
-      .setName("Default mode")
-      .setDesc("Default mode for new Agent tabs.")
+      .setName(this.tr("Language / 语言", "Language / 语言"))
+      .setDesc(this.tr("选择界面语言。Agent、Ask、New Agent 等产品词保持英文。", "Choose the UI language. Product terms such as Agent, Ask, and New Agent stay in English."))
+      .addDropdown((dropdown) => dropdown
+        .addOption("zh", "中文")
+        .addOption("en", "English")
+        .setValue(settings.language)
+        .onChange(async (value) => {
+          await this.update({ language: value as AppLanguage });
+          this.display();
+        }));
+
+    new Setting(containerEl)
+      .setName(this.tr("默认模式", "Default mode"))
+      .setDesc(this.tr("新 Agent 标签页默认使用的模式。", "Default mode for new Agent tabs."))
       .addDropdown((dropdown) => dropdown
         .addOption("agent", "Agent")
         .addOption("ask", "Ask")
@@ -2401,16 +2446,16 @@ class CodexAgentSettingTab extends PluginSettingTab {
         .onChange(async (value) => this.update({ defaultMode: value as AgentMode })));
 
     new Setting(containerEl)
-      .setName("Default model")
-      .setDesc("Default model for new Agent tabs.")
+      .setName(this.tr("默认模型", "Default model"))
+      .setDesc(this.tr("新 Agent 标签页默认使用的模型。", "Default model for new Agent tabs."))
       .addDropdown((dropdown) => {
         (["GPT-5.5", "GPT-5.4", "GPT-5.4 Mini", "GPT-5.3 Codex"] as ModelChoice[]).forEach((model) => dropdown.addOption(model, model));
         dropdown.setValue(settings.defaultModel).onChange(async (value) => this.update({ defaultModel: value as ModelChoice }));
       });
 
     new Setting(containerEl)
-      .setName("Default reasoning")
-      .setDesc("Default reasoning level for new Agent tabs. It is passed to App Server as effort.")
+      .setName(this.tr("默认推理强度", "Default reasoning"))
+      .setDesc(this.tr("新 Agent 标签页默认使用的推理强度。", "Default reasoning level for new Agent tabs. It is passed to App Server as effort."))
       .addDropdown((dropdown) => {
         (["Auto", "Low", "Medium", "High", "Extra High"] as ReasoningLevel[]).forEach((level) => dropdown.addOption(level, level));
         dropdown.setValue(settings.defaultReasoningLevel).onChange(async (value) => this.update({ defaultReasoningLevel: value as ReasoningLevel }));
@@ -2418,28 +2463,28 @@ class CodexAgentSettingTab extends PluginSettingTab {
   }
 
   private renderContext(containerEl: HTMLElement, settings: AgentPluginSettings) {
-    containerEl.createEl("h3", { text: "Context" });
+    containerEl.createEl("h3", { text: this.tr("上下文", "Context") });
     new Setting(containerEl)
-      .setName("Auto-attach active note")
-      .setDesc("Automatically attach the active note as context. Off by default to avoid sending full notes unexpectedly.")
+      .setName(this.tr("自动附加当前笔记", "Auto-attach active note"))
+      .setDesc(this.tr("自动把当前笔记作为上下文。默认关闭，避免意外发送整篇笔记。", "Automatically attach the active note as context. Off by default to avoid sending full notes unexpectedly."))
       .addToggle((toggle) => toggle.setValue(settings.autoAttachActiveNote).onChange(async (value) => this.update({ autoAttachActiveNote: value })));
 
     new Setting(containerEl)
-      .setName('Enable right-click "Add to Agent"')
-      .setDesc("Show Add to Agent in editor selection, file, and folder context menus.")
+      .setName(this.tr('启用右键 "Add to Agent"', 'Enable right-click "Add to Agent"'))
+      .setDesc(this.tr("在编辑器选区、文件和文件夹菜单中显示 Add to Agent。", "Show Add to Agent in editor selection, file, and folder context menus."))
       .addToggle((toggle) => toggle.setValue(settings.enableRightClickAddToAgent).onChange(async (value) => this.update({ enableRightClickAddToAgent: value })));
 
     new Setting(containerEl)
-      .setName("Pasted image behavior")
-      .setDesc("Convert pasted images into image chips. This can later expand to direct image context.")
+      .setName(this.tr("粘贴图片行为", "Pasted image behavior"))
+      .setDesc(this.tr("将粘贴的图片转换为图片 chip。", "Convert pasted images into image chips. This can later expand to direct image context."))
       .addDropdown((dropdown) => dropdown.addOption("chip", "Convert to image chip").setValue(settings.pastedImageBehavior));
   }
 
   private renderSafety(containerEl: HTMLElement, settings: AgentPluginSettings) {
-    containerEl.createEl("h3", { text: "Safety" });
+    containerEl.createEl("h3", { text: this.tr("安全", "Safety") });
     new Setting(containerEl)
-      .setName("External path access")
-      .setDesc("Policy for accessing paths outside the current vault.")
+      .setName(this.tr("外部路径访问", "External path access"))
+      .setDesc(this.tr("访问当前 vault 外部路径时的策略。", "Policy for accessing paths outside the current vault."))
       .addDropdown((dropdown) => dropdown
         .addOption("ask-each-time", "Ask every time")
         .addOption("allow-session", "Allow for current session")
@@ -2448,16 +2493,16 @@ class CodexAgentSettingTab extends PluginSettingTab {
         .onChange(async (value) => this.update({ externalPathAccess: value as ExternalPathAccess })));
 
     new Setting(containerEl)
-      .setName("Show detailed approval explanation")
-      .setDesc("Show operation, target, purpose, command, and raw reason in approval cards.")
+      .setName(this.tr("显示详细审批说明", "Show detailed approval explanation"))
+      .setDesc(this.tr("在审批卡片中显示操作、目标、目的、命令和原始原因。", "Show operation, target, purpose, command, and raw reason in approval cards."))
       .addToggle((toggle) => toggle.setValue(settings.showDetailedApprovals).onChange(async (value) => this.update({ showDetailedApprovals: value })));
   }
 
   private renderDisplay(containerEl: HTMLElement, settings: AgentPluginSettings) {
-    containerEl.createEl("h3", { text: "Display" });
+    containerEl.createEl("h3", { text: this.tr("显示", "Display") });
     new Setting(containerEl)
-      .setName("Chat view location")
-      .setDesc("Where to open the Agent view.")
+      .setName(this.tr("对话视图位置", "Chat view location"))
+      .setDesc(this.tr("选择 Agent 视图打开的位置。", "Where to open the Agent view."))
       .addDropdown((dropdown) => dropdown
         .addOption("right-pane", "Right pane tabs")
         .addOption("left-pane", "Left pane tabs")
@@ -2466,61 +2511,61 @@ class CodexAgentSettingTab extends PluginSettingTab {
         .onChange(async (value) => this.update({ chatViewLocation: value as ChatViewLocation })));
 
     new Setting(containerEl)
-      .setName("Chat font size")
-      .setDesc("Message text size in pixels. Recommended range: 14-17. Allowed range: 13-20.")
+      .setName(this.tr("对话字号", "Chat font size"))
+      .setDesc(this.tr("消息文字大小，单位为像素。推荐 14-17，可选 13-20。", "Message text size in pixels. Recommended range: 14-17. Allowed range: 13-20."))
       .addSlider((slider) => slider
         .setLimits(13, 20, 1)
         .setValue(settings.chatFontSize)
         .setDynamicTooltip()
         .onChange(async (value) => this.update({ chatFontSize: value })))
       .addButton((button) => button
-        .setButtonText("Reset")
-        .setTooltip("Reset chat font size")
+        .setButtonText(this.tr("重置", "Reset"))
+        .setTooltip(this.tr("重置对话字号", "Reset chat font size"))
         .onClick(async () => {
           await this.update({ chatFontSize: DEFAULT_SETTINGS.chatFontSize });
           this.display();
         }));
 
     new Setting(containerEl)
-      .setName("Sticky user prompts")
-      .setDesc("Show the current user prompt anchor while scrolling.")
+      .setName(this.tr("固定用户提示", "Sticky user prompts"))
+      .setDesc(this.tr("滚动时显示当前用户提示的定位条。", "Show the current user prompt anchor while scrolling."))
       .addToggle((toggle) => toggle.setValue(settings.stickyUserPrompts).onChange(async (value) => this.update({ stickyUserPrompts: value })));
 
     new Setting(containerEl)
-      .setName("Compact command groups")
-      .setDesc("Collapse command logs into one line by default.")
+      .setName(this.tr("紧凑命令分组", "Compact command groups"))
+      .setDesc(this.tr("默认将命令日志折叠为一行。", "Collapse command logs into one line by default."))
       .addToggle((toggle) => toggle.setValue(settings.compactCommandGroups).onChange(async (value) => this.update({ compactCommandGroups: value })));
 
     new Setting(containerEl)
-      .setName("Diff line numbers")
-      .setDesc("Show old and new line numbers in diffs.")
+      .setName(this.tr("Diff 行号", "Diff line numbers"))
+      .setDesc(this.tr("在 diff 中显示旧行号和新行号。", "Show old and new line numbers in diffs."))
       .addToggle((toggle) => toggle.setValue(settings.diffLineNumbers).onChange(async (value) => this.update({ diffLineNumbers: value })));
 
     new Setting(containerEl)
-      .setName("Change review")
-      .setDesc("Show Codex file-change review, including diff preview plus accept/reject controls. Turn this off if you do not want review workflows.")
+      .setName(this.tr("改动审查", "Change review"))
+      .setDesc(this.tr("显示 Codex 文件改动审查，包括 diff 预览和接受/拒绝控制。", "Show Codex file-change review, including diff preview plus accept/reject controls."))
       .addToggle((toggle) => toggle.setValue(settings.enableDiffReview).onChange(async (value) => this.update({ enableDiffReview: value })));
 
     new Setting(containerEl)
-      .setName("Git management")
-      .setDesc("Show Git-specific controls for staging, committing, and history. This is independent from Codex change review.")
+      .setName(this.tr("Git 管理", "Git management"))
+      .setDesc(this.tr("显示暂存、提交和历史等 Git 操作。它与改动审查相互独立。", "Show Git-specific controls for staging, committing, and history. This is independent from Codex change review."))
       .addToggle((toggle) => toggle.setValue(settings.enableGitManagement).onChange(async (value) => this.update({ enableGitManagement: value })));
   }
 
   private renderDataManagement(containerEl: HTMLElement) {
-    containerEl.createEl("h3", { text: "Data" });
+    containerEl.createEl("h3", { text: this.tr("数据", "Data") });
     new Setting(containerEl)
-      .setName("User data")
-      .setDesc("Stored outside the plugin install folder at .obsidian/.codexaiagent/data.json so reinstalling the plugin does not remove conversations or review state.")
+      .setName(this.tr("用户数据", "User data"))
+      .setDesc(this.tr("用户数据保存在 .obsidian/.codexaiagent/data.json，重装插件不会删除会话或审查状态。", "Stored outside the plugin install folder at .obsidian/.codexaiagent/data.json so reinstalling the plugin does not remove conversations or review state."))
       .addButton((button) => button
-        .setButtonText("Clear user data")
+        .setButtonText(this.tr("清理用户数据", "Clear user data"))
         .setWarning()
         .onClick(() => {
           new CodexConfirmModal(
             this.app,
-            "清理 Codex AI Agent 用户数据？",
-            "这会删除 .obsidian/.codexaiagent 下的会话、设置和 diff 审查状态。当前 Agent 面板会关闭，插件设置会恢复默认值。",
-            "确认清理",
+            this.tr("清理 Codex AI Agent 用户数据？", "Clear Codex AI Agent user data?"),
+            this.tr("这会删除 .obsidian/.codexaiagent 下的会话、设置和 diff 审查状态。当前 Agent 面板会关闭，插件设置会恢复默认值。", "This deletes conversations, settings, and diff review state under .obsidian/.codexaiagent. The current Agent panel will close and settings will reset to defaults."),
+            this.tr("确认清理", "Clear data"),
             true,
             () => void this.owner.clearUserData()
           ).open();
@@ -2738,6 +2783,7 @@ class CodexAgentView extends ItemView {
   private archivedSessions: AgentSession[] = [];
   private activeSessionId = "";
   private runningSessionId: string | null = null;
+  private isRestoringComposer = false;
   private promptInput: HTMLElement | null = null;
   private promptPlaceholderEl: HTMLElement | null = null;
   private promptPickerEl: HTMLElement | null = null;
@@ -2780,22 +2826,16 @@ class CodexAgentView extends ItemView {
   private auxModeOutsideClickHandler: ((event: MouseEvent) => void) | null = null;
   private turnAuxMode: TurnAuxMode = "auto";
   private runButton: HTMLButtonElement | null = null;
-  private runningProcess: AgentRunHandle | null = null;
-  private isCancellingRun = false;
+  private runningProcesses = new Map<string, AgentRunState>();
+  private currentRunState: AgentRunState | null = null;
+  private elapsedTimers = new Map<string, number>();
   private pendingApprovals = new Map<string, ApprovalRequestState>();
   private activeApprovalModal: CodexApprovalNoticeModal | null = null;
-  private activeResponseItemId: string | null = null;
-  private activeResponseItemIndex: number | null = null;
-  private exploredFiles = new Set<string>();
   private responseRenderTimer: number | null = null;
   private liveStatusEl: HTMLElement | null = null;
   private liveStatusTextEl: HTMLElement | null = null;
   private elapsedTimer: number | null = null;
-  private currentRunStatusTitle = "Thinking";
-  private currentRunStatusBody = "";
-  private currentRunMetaDetail = "";
   private shouldShowScrollBottomButton = false;
-  private currentDiffStats: any = null;
 
   constructor(leaf: WorkspaceLeaf, private owner: CodexForObsidianPlugin) {
     super(leaf);
@@ -2841,10 +2881,18 @@ class CodexAgentView extends ItemView {
     });
   }
 
+  private tr(zh: string, en: string) {
+    return this.owner.tr(zh, en);
+  }
+
   applyDisplaySettings() {
     const settings = this.owner.getSettings();
     const container = this.containerEl.children[1] as HTMLElement | undefined;
     container?.style.setProperty("--codex-chat-font-size", `${settings.chatFontSize}px`);
+    this.promptPlaceholderEl?.setText(this.tr(
+      "问 Codex 任何问题。用 @ 添加文件或文件夹，/ 选择技能...",
+      "Ask Codex anything. Use @ to attach files or folders, / to choose a skill..."
+    ));
     if (!settings.enableDiffReview) {
       this.liveDiffEl?.empty();
       this.liveDiffEl?.removeClass("is-visible");
@@ -2864,6 +2912,7 @@ class CodexAgentView extends ItemView {
   }
 
   async onClose() {
+    this.saveComposerDraftToActiveSession();
     this.stopElapsedTimer();
     this.stopGitChangesTimer();
     this.closeGitDiffPanel();
@@ -2877,12 +2926,7 @@ class CodexAgentView extends ItemView {
       window.clearTimeout(this.responseRenderTimer);
       this.responseRenderTimer = null;
     }
-    if (this.runningProcess) {
-      this.isCancellingRun = true;
-      this.runningProcess.cancel();
-      this.runningProcess = null;
-    }
-    this.runningSessionId = null;
+    [...this.runningProcesses.keys()].forEach((sessionId) => this.cancelRun(sessionId));
     this.persistSessions();
   }
 
@@ -2910,11 +2954,12 @@ class CodexAgentView extends ItemView {
     this.tabContainer.empty();
     this.sessions.forEach((session) => {
       const hasPendingApproval = this.hasPendingApproval(session.id);
+      const isRunning = this.isSessionRunning(session.id);
       const tab = this.tabContainer!.createEl("button", {
-        cls: `codex-agent-tab ${session.id === this.activeSessionId ? "is-active" : ""} ${hasPendingApproval ? "has-pending-approval" : ""}`
+        cls: `codex-agent-tab ${session.id === this.activeSessionId ? "is-active" : ""} ${hasPendingApproval ? "has-pending-approval" : ""} ${isRunning ? "is-running" : ""}`
       });
       const tabIcon = tab.createSpan({ cls: "codex-agent-tab-icon" });
-      setIcon(tabIcon, AGENT_ICON_ID);
+      setIcon(tabIcon, isRunning ? "loader-circle" : AGENT_ICON_ID);
       if (hasPendingApproval) {
         tabIcon.createSpan({ cls: "codex-agent-tab-alert-dot" });
       }
@@ -2922,11 +2967,14 @@ class CodexAgentView extends ItemView {
       const close = tab.createSpan({ cls: "codex-agent-tab-close", text: "×" });
 
       tab.addEventListener("click", () => {
-      this.activeSessionId = session.id;
+        this.saveComposerDraftToActiveSession();
+        this.activeSessionId = session.id;
+        this.restoreComposerDraftFromActiveSession();
         this.persistSessions();
         this.renderSessionTabs();
         this.renderTimelineItems();
         this.renderTokenUsage();
+        this.updateRunButtonDisabledState();
         window.requestAnimationFrame(() => {
           this.shouldShowScrollBottomButton = false;
           this.scrollTimelineToBottom("auto");
@@ -3160,6 +3208,7 @@ class CodexAgentView extends ItemView {
   }
 
   private restoreSession(sessionId: string) {
+    this.saveComposerDraftToActiveSession();
     const archived = this.archivedSessions.find((session) => session.id === sessionId);
     if (archived) {
       archived.closedAt = undefined;
@@ -3168,7 +3217,9 @@ class CodexAgentView extends ItemView {
       this.sessions = [...this.sessions, archived];
     }
     this.activeSessionId = sessionId;
+    this.restoreComposerDraftFromActiveSession();
     this.persistSessions();
+    this.updateRunButtonDisabledState();
     this.renderTokenUsage();
   }
 
@@ -3879,11 +3930,15 @@ class CodexAgentView extends ItemView {
     });
     this.promptPlaceholderEl = inputBox.createDiv({
       cls: "codex-agent-prompt-placeholder is-visible",
-      text: "Ask Codex anything. Use @ to attach files or folders, / to choose a skill..."
+      text: this.tr(
+        "问 Codex 任何问题。用 @ 添加文件或文件夹，/ 选择技能...",
+        "Ask Codex anything. Use @ to attach files or folders, / to choose a skill..."
+      )
     });
     this.promptInput.addEventListener("input", () => {
       this.normalizePromptLeadingChipLayout();
       this.updatePromptEmptyState();
+      this.saveComposerDraftToActiveSession();
       this.updatePromptPicker();
     });
     this.promptInput.addEventListener("focus", () => this.updatePromptEmptyState());
@@ -3936,6 +3991,7 @@ class CodexAgentView extends ItemView {
     });
     this.renderGitChanges();
     this.startGitChangesTimer();
+    this.restoreComposerDraftFromActiveSession();
   }
 
   private setRunButtonRunning(isRunning: boolean) {
@@ -4076,7 +4132,7 @@ class CodexAgentView extends ItemView {
     const limit = session.tokenUsageLimit;
     this.tokenUsageEl.empty();
     if (typeof input !== "number") {
-      this.tokenUsageEl.createSpan({ cls: "codex-agent-token-label", text: "Context: waiting for Codex" });
+      this.tokenUsageEl.createSpan({ cls: "codex-agent-token-label", text: this.tr("上下文：等待 Codex", "Context: waiting for Codex") });
       return;
     }
     if (typeof limit === "number" && limit > 0) {
@@ -4144,17 +4200,21 @@ class CodexAgentView extends ItemView {
     targetEl.setAttr(
       "title",
       reviewOnly
-        ? "打开改动审查。当前未启用 Git 管理，因此只显示接受/拒绝。"
-        : "打开 Git 工作区面板。Git 暂存/提交/历史与审查接受/拒绝是独立功能。"
+        ? this.tr("打开改动审查。当前未启用 Git 管理，因此只显示接受/拒绝。", "Open change review. Git management is disabled, so only accept/reject is shown.")
+        : this.tr("打开 Git 工作区面板。Git 暂存/提交/历史与审查接受/拒绝是独立功能。", "Open Git workspace. Git staging/commit/history is separate from review accept/reject.")
     );
     setIcon(targetEl.createSpan("codex-agent-git-changes-icon"), reviewOnly ? "file-check-2" : isClean ? "git-branch" : "git-compare");
-    const fileLabel = stats.files === 1 ? "1 个改动文件" : `${stats.files} 个改动文件`;
-    const untrackedLabel = stats.untracked > 0 ? ` · ${stats.untracked} 个未跟踪` : "";
+    const fileLabel = stats.files === 1
+      ? this.tr("1 个改动文件", "1 changed file")
+      : this.tr(`${stats.files} 个改动文件`, `${stats.files} changed files`);
+    const untrackedLabel = stats.untracked > 0
+      ? this.tr(` · ${stats.untracked} 个未跟踪`, ` · ${stats.untracked} untracked`)
+      : "";
     targetEl.createSpan({
       cls: "codex-agent-git-changes-label",
       text: reviewOnly
-        ? stats.files > 0 ? `审查改动 · ${fileLabel}` : "审查改动 · 当前无待审查"
-        : isClean ? "Git 工作区干净 · 查看版本记录" : `Git 工作区 · ${fileLabel}${untrackedLabel}`
+        ? stats.files > 0 ? `${this.tr("审查改动", "Review changes")} · ${fileLabel}` : this.tr("审查改动 · 当前无待审查", "Review changes · Nothing to review")
+        : isClean ? this.tr("Git 工作区干净 · 查看版本记录", "Git workspace clean · View history") : `${this.tr("Git 工作区", "Git workspace")} · ${fileLabel}${untrackedLabel}`
     });
     if (!isClean && !reviewOnly) {
       this.renderDiffCounts(targetEl, stats.added, stats.removed, false);
@@ -4190,7 +4250,7 @@ class CodexAgentView extends ItemView {
       new Notice("Change review is disabled in Codex Agent settings.");
       return;
     }
-    const stats = this.currentDiffStats;
+    const stats = this.getActiveRunState()?.currentDiffStats;
     if (!stats || stats.files.length === 0) {
       new Notice("No Codex file changes to review.");
       return;
@@ -4201,7 +4261,8 @@ class CodexAgentView extends ItemView {
   }
 
   private finalizePreviousDiffReviewForNextTurn() {
-    const files = this.currentDiffStats?.files?.length ? this.currentDiffStats.files as DiffFileView[] : this.gitDiffReviewFiles;
+    const activeRun = this.getActiveRunState();
+    const files = activeRun?.currentDiffStats?.files?.length ? activeRun.currentDiffStats.files as DiffFileView[] : this.gitDiffReviewFiles;
     files.forEach((file) => {
       if (this.gitDiffRejectedFiles.has(file.path)) {
         return;
@@ -4211,7 +4272,9 @@ class CodexAgentView extends ItemView {
       file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line))));
     });
     this.persistGitDiffReviewState();
-    this.currentDiffStats = null;
+    if (activeRun) {
+      activeRun.currentDiffStats = null;
+    }
     this.gitDiffReviewFiles = [];
     this.gitDiffExpandedFiles = new Set();
     this.gitDiffReviewFilter = "active";
@@ -4240,17 +4303,17 @@ class CodexAgentView extends ItemView {
     const title = header.createDiv("codex-agent-git-diff-title");
     title.createSpan({
       text: enableGitSections
-        ? enableReview ? "改动审查 / Git 工作区" : "Git 工作区"
-        : "改动审查"
+        ? enableReview ? this.tr("改动审查 / Git 工作区", "Change review / Git workspace") : this.tr("Git 工作区", "Git workspace")
+        : this.tr("改动审查", "Change review")
     });
     this.renderDiffCounts(title, added, removed, false);
     header.createDiv({
       cls: "codex-agent-git-diff-subtitle",
       text: enableGitSections
         ? enableReview
-          ? "审查用于接受或拒绝文件改动；Git 工作区用于暂存、提交和查看历史，二者不会自动同步。"
-          : "当前关闭改动审查；这里只查看 Git 工作区，并处理暂存、提交和版本记录。"
-        : "当前未启用 Git 管理；这里只处理接受/拒绝，不会暂存、提交或写入 Git 历史。"
+          ? this.tr("审查用于接受或拒绝文件改动；Git 工作区用于暂存、提交和查看历史，二者不会自动同步。", "Review is for accepting or rejecting file changes. Git workspace is for staging, committing, and history. They do not sync automatically.")
+          : this.tr("当前关闭改动审查；这里只查看 Git 工作区，并处理暂存、提交和版本记录。", "Change review is disabled. This panel only shows Git workspace, staging, commits, and history.")
+        : this.tr("当前未启用 Git 管理；这里只处理接受/拒绝，不会暂存、提交或写入 Git 历史。", "Git management is disabled. This panel only handles accept/reject and will not stage, commit, or write Git history.")
     });
     const close = header.createEl("button", {
       cls: "codex-agent-git-diff-close",
@@ -4270,8 +4333,8 @@ class CodexAgentView extends ItemView {
         const banner = stepsHost.createDiv("codex-agent-review-only-banner");
         setIcon(banner.createSpan("codex-agent-review-only-icon"), "file-check-2");
         const text = banner.createSpan("codex-agent-review-only-text");
-        text.createSpan({ cls: "codex-agent-review-only-title", text: "只审查改动" });
-        text.createSpan({ cls: "codex-agent-review-only-detail", text: "当前未启用 Git 管理；这里只处理接受/拒绝，不显示暂存、提交和版本记录。" });
+      text.createSpan({ cls: "codex-agent-review-only-title", text: this.tr("只审查改动", "Review only") });
+      text.createSpan({ cls: "codex-agent-review-only-detail", text: this.tr("当前未启用 Git 管理；这里只处理接受/拒绝，不显示暂存、提交和版本记录。", "Git management is disabled. This only handles accept/reject and hides staging, commits, and history.") });
         return;
       }
       this.renderGitReviewSteps(stepsHost, files, this.activeGitReviewSection, enableReview, (section) => {
@@ -4285,12 +4348,12 @@ class CodexAgentView extends ItemView {
       const empty = list.createDiv("codex-agent-git-diff-empty-state");
       setIcon(empty.createSpan("codex-agent-git-diff-empty-icon"), enableGitSections ? "git-branch" : "file-check-2");
       const text = empty.createDiv("codex-agent-git-diff-empty-text");
-      text.createDiv({ cls: "codex-agent-git-diff-empty-title", text: enableGitSections ? "工作区干净" : "当前无待审查改动" });
+      text.createDiv({ cls: "codex-agent-git-diff-empty-title", text: enableGitSections ? this.tr("工作区干净", "Workspace clean") : this.tr("当前无待审查改动", "Nothing to review") });
       text.createDiv({
         cls: "codex-agent-git-diff-empty-detail",
         text: enableGitSections
-          ? "没有未提交的文件改动。入口会继续保留，用于查看版本记录或发起下一次提交检查。"
-          : "审查功能已开启，但当前没有可接受或拒绝的文件改动。"
+          ? this.tr("没有未提交的文件改动。入口会继续保留，用于查看版本记录或发起下一次提交检查。", "There are no uncommitted file changes. The entry stays available for history or future commit checks.")
+          : this.tr("审查功能已开启，但当前没有可接受或拒绝的文件改动。", "Change review is enabled, but there are no file changes to accept or reject.")
       });
       return;
     }
@@ -4299,8 +4362,8 @@ class CodexAgentView extends ItemView {
         const empty = list.createDiv("codex-agent-git-diff-empty-state");
         setIcon(empty.createSpan("codex-agent-git-diff-empty-icon"), "filter");
         const text = empty.createDiv("codex-agent-git-diff-empty-text");
-        text.createDiv({ cls: "codex-agent-git-diff-empty-title", text: "当前过滤下没有文件" });
-        text.createDiv({ cls: "codex-agent-git-diff-empty-detail", text: "已处理文件会默认隐藏。切换到“全部”或“已接受”可以回看。" });
+        text.createDiv({ cls: "codex-agent-git-diff-empty-title", text: this.tr("当前过滤下没有文件", "No files match this filter") });
+        text.createDiv({ cls: "codex-agent-git-diff-empty-detail", text: this.tr("已处理文件会默认隐藏。切换到“全部”或“已接受”可以回看。", "Processed files are hidden by default. Switch to All or Accepted to review them.") });
         return;
       }
       visibleFiles.forEach((file) => {
@@ -4336,13 +4399,13 @@ class CodexAgentView extends ItemView {
           const detail = fileBlock.createDiv("codex-agent-diff-file-detail");
           detail.createDiv({ cls: "codex-agent-diff-file-reason", text: this.describeDiffFileReason(file) });
           const actions = detail.createDiv("codex-agent-diff-file-actions");
-          const open = actions.createEl("button", { cls: "codex-agent-diff-action", text: "打开文件", attr: { type: "button" } });
+          const open = actions.createEl("button", { cls: "codex-agent-diff-action", text: this.tr("打开文件", "Open file"), attr: { type: "button" } });
           open.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
             void this.openDiffFileForReview(file);
           });
-          const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? "已接受" : "接受文件", attr: { type: "button" } });
+          const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? this.tr("已接受", "Accepted") : this.tr("接受文件", "Accept file"), attr: { type: "button" } });
           accept.disabled = accepted;
           accept.addEventListener("click", (event) => {
             event.preventDefault();
@@ -4354,7 +4417,7 @@ class CodexAgentView extends ItemView {
           this.persistGitDiffReviewState();
           renderPanelBody();
           });
-          const reject = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "拒绝文件", attr: { type: "button" } });
+          const reject = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: this.tr("拒绝文件", "Reject file"), attr: { type: "button" } });
           reject.disabled = status.key !== "pending";
           reject.setAttr("title", status.key === "pending" ? "拒绝整个文件改动" : "已有接受记录，不能再整体拒绝");
           reject.addEventListener("click", (event) => {
@@ -4408,17 +4471,17 @@ class CodexAgentView extends ItemView {
         renderSectionAction(
           quickActions,
           "file-text",
-          "总结当前变更",
-          "只读分析，不暂存、不提交",
+          this.tr("总结当前变更", "Summarize changes"),
+          this.tr("只读分析，不暂存、不提交", "Read-only; no staging or commit"),
           "请总结当前未提交变更，按文件分组说明修改目的、关键影响和需要我重点审查的风险；不要修改文件。",
-          "已填入总结当前变更的请求。"
+          this.tr("已填入总结当前变更的请求。", "Inserted the change-summary request.")
         );
         this.renderDiffReviewFilters(section, files, renderPanelBody);
         if (files.length > 0) {
           const bulkActions = section.createDiv("codex-agent-git-diff-bulk-actions");
-          bulkActions.createEl("button", { cls: "codex-agent-diff-action", text: "全部接受", attr: { type: "button" } })
+          bulkActions.createEl("button", { cls: "codex-agent-diff-action", text: this.tr("全部接受", "Accept all"), attr: { type: "button" } })
             .addEventListener("click", () => this.confirmAcceptAllDiffFiles(files, refreshReview));
-          bulkActions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "全部拒绝", attr: { type: "button" } })
+          bulkActions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: this.tr("全部拒绝", "Reject all"), attr: { type: "button" } })
             .addEventListener("click", () => this.confirmRejectAllDiffFiles(files));
         }
         this.renderGitBoundaryNote(section, enableGitSections);
@@ -4430,11 +4493,11 @@ class CodexAgentView extends ItemView {
         this.renderGitOperationSection(
           section,
           "git-pull-request",
-          "暂存变更",
-          "暂存是 Git 的提交候选区，和上方审查标记相互独立。请先查看 Git 状态，再明确选择要暂存的文件。",
-          "选择暂存",
+          this.tr("暂存变更", "Stage changes"),
+          this.tr("暂存是 Git 的提交候选区，和上方审查标记相互独立。请先查看 Git 状态，再明确选择要暂存的文件。", "Staging is Git's commit candidate area and is independent from review markers. Check Git status first, then choose what to stage."),
+          this.tr("选择暂存", "Choose staging"),
           "请查看当前 Git 状态，列出工作区改动和暂存区内容；不要自动暂存，先让我选择要暂存的文件。",
-          "已新建 Agent 并发送 Git 暂存请求。",
+          this.tr("已新建 Agent 并发送 Git 暂存请求。", "Created a new Agent and sent the Git staging request."),
           true
         );
         this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
@@ -4444,11 +4507,11 @@ class CodexAgentView extends ItemView {
         this.renderGitOperationSection(
           section,
           "git-commit",
-          "提交版本",
-          "提交会把暂存区保存成一次 Git 历史版本。提交前应先确认工作区、暂存区和提交说明，避免把未审查内容混进去。",
-          "提交变更",
+          this.tr("提交版本", "Commit version"),
+          this.tr("提交会把暂存区保存成一次 Git 历史版本。提交前应先确认工作区、暂存区和提交说明，避免把未审查内容混进去。", "Commit saves the staging area as Git history. Confirm workspace, staging area, and commit message first."),
+          this.tr("提交变更", "Commit changes"),
           "请检查当前 Git 状态，确认工作区和暂存区没有明显问题后，暂存相关文件并创建一次语义清晰的 Git 提交。提交前先说明将包含哪些文件。",
-          "已新建 Agent 并发送 Git 提交请求。",
+          this.tr("已新建 Agent 并发送 Git 提交请求。", "Created a new Agent and sent the Git commit request."),
           true
         );
         this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
@@ -4457,11 +4520,11 @@ class CodexAgentView extends ItemView {
       this.renderGitOperationSection(
         section,
         "history",
-        "版本记录",
-        "版本记录只查看已经提交过的历史。这里适合对比、回看或讨论回退方案，不会改动当前文件。",
-        "查看记录",
+        this.tr("版本记录", "Version history"),
+        this.tr("版本记录只查看已经提交过的历史。这里适合对比、回看或讨论回退方案，不会改动当前文件。", "Version history only reads committed history. Use it for comparison, review, or rollback discussion."),
+        this.tr("查看记录", "View history"),
         "请查看最近 Git 提交记录，按时间列出版本说明，并提示是否存在适合回退或对比的版本；不要修改文件。",
-        "已填入查看版本记录的请求。"
+        this.tr("已填入查看版本记录的请求。", "Inserted the history request.")
       );
       this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
     };
@@ -4492,10 +4555,10 @@ class CodexAgentView extends ItemView {
       return counts;
     }, {});
     const filters: Array<{ key: DiffReviewFilter; label: string; count: number }> = [
-      { key: "active", label: "待审查", count: (statusCounts.pending ?? 0) + (statusCounts.partial ?? 0) },
-      { key: "accepted", label: "已接受", count: statusCounts.accepted ?? 0 },
-      { key: "rejected", label: "已拒绝", count: statusCounts.rejected ?? 0 },
-      { key: "all", label: "全部", count: files.length }
+      { key: "active", label: this.tr("待审查", "To review"), count: (statusCounts.pending ?? 0) + (statusCounts.partial ?? 0) },
+      { key: "accepted", label: this.tr("已接受", "Accepted"), count: statusCounts.accepted ?? 0 },
+      { key: "rejected", label: this.tr("已拒绝", "Rejected"), count: statusCounts.rejected ?? 0 },
+      { key: "all", label: this.tr("全部", "All"), count: files.length }
     ];
     const bar = parent.createDiv("codex-agent-diff-filter-bar");
     filters.forEach((filter) => {
@@ -4530,9 +4593,9 @@ class CodexAgentView extends ItemView {
   private confirmAcceptAllDiffFiles(files: DiffFileView[], refresh: () => void) {
     new CodexConfirmModal(
       this.app,
-      "接受所有文件？",
-      `这会把当前 ${files.length} 个文件标记为已接受。文件内容不会额外改动，因为这些修改已经在工作区中。`,
-      "确认接受",
+      this.tr("接受所有文件？", "Accept all files?"),
+      this.tr(`这会把当前 ${files.length} 个文件标记为已接受。文件内容不会额外改动，因为这些修改已经在工作区中。`, `This marks all ${files.length} files as accepted. File content will not be changed because these edits are already in the workspace.`),
+      this.tr("确认接受", "Accept all"),
       false,
       () => {
         files.forEach((file) => {
@@ -4543,7 +4606,7 @@ class CodexAgentView extends ItemView {
         });
         this.persistGitDiffReviewState();
         refresh();
-        new Notice(`已接受 ${files.length} 个文件。`);
+        new Notice(this.tr(`已接受 ${files.length} 个文件。`, `Accepted ${files.length} files.`));
       }
     ).open();
   }
@@ -4551,9 +4614,9 @@ class CodexAgentView extends ItemView {
   private confirmRejectAllDiffFiles(files: DiffFileView[]) {
     new CodexConfirmModal(
       this.app,
-      "拒绝所有文件？",
+      this.tr("拒绝所有文件？", "Reject all files?"),
       `这会实际撤回当前 ${files.length} 个文件的工作区修改。此操作会反向应用 patch，请确认这些改动都不要保留。`,
-      "确认拒绝",
+      this.tr("确认拒绝", "Reject all"),
       true,
       () => void this.rejectAllDiffFiles(files)
     ).open();
@@ -4593,12 +4656,12 @@ class CodexAgentView extends ItemView {
     const steps = parent.createDiv("codex-agent-git-review-steps");
     const items: Array<{ section: GitReviewSection; label: string; detail: string }> = [];
     if (enableReview) {
-      items.push({ section: "review", label: "审查改动", detail: hasFiles ? "接受或拒绝文件改动" : "没有待审查文件" });
+      items.push({ section: "review", label: this.tr("审查改动", "Change review"), detail: hasFiles ? this.tr("接受或拒绝文件改动", "Accept or reject file changes") : this.tr("没有待审查文件", "No files to review") });
     }
     items.push(
-      { section: "stage", label: "Git 暂存", detail: hasFiles ? "管理提交候选区" : "查看暂存区" },
-      { section: "commit", label: "Git 提交", detail: hasFiles ? "创建一次提交" : "检查提交状态" },
-      { section: "history", label: "版本记录", detail: "查看提交历史" }
+      { section: "stage", label: this.tr("Git 暂存", "Git staging"), detail: hasFiles ? this.tr("管理提交候选区", "Manage commit candidates") : this.tr("查看暂存区", "View staging area") },
+      { section: "commit", label: this.tr("Git 提交", "Git commit"), detail: hasFiles ? this.tr("创建一次提交", "Create a commit") : this.tr("检查提交状态", "Check commit status") },
+      { section: "history", label: this.tr("版本记录", "Version history"), detail: this.tr("查看提交历史", "View commit history") }
     );
     items.forEach((step) => {
       const item = steps.createEl("button", {
@@ -4641,25 +4704,25 @@ class CodexAgentView extends ItemView {
 
   private renderGitBoundaryNote(parent: HTMLElement, enableGitSections: boolean) {
     const note = parent.createDiv("codex-agent-git-boundary-note");
-    note.createSpan({ cls: "codex-agent-git-boundary-kicker", text: "边界说明" });
+    note.createSpan({ cls: "codex-agent-git-boundary-kicker", text: this.tr("边界说明", "Boundary") });
     note.createSpan({
       cls: "codex-agent-git-boundary-text",
       text: enableGitSections
-        ? "审查的接受/拒绝只影响是否保留工作区内容；Git 暂存/提交只管理版本记录，暂存时不会自动读取审查标记。"
-        : "这里是审查模式：接受表示保留改动，拒绝会撤回改动；不涉及 Git 暂存、提交或历史版本。"
+        ? this.tr("审查的接受/拒绝只影响是否保留工作区内容；Git 暂存/提交只管理版本记录，暂存时不会自动读取审查标记。", "Review accept/reject only decides whether workspace content is kept. Git staging/commit manages version history and does not automatically read review markers.")
+        : this.tr("这里是审查模式：接受表示保留改动，拒绝会撤回改动；不涉及 Git 暂存、提交或历史版本。", "This is review mode. Accept keeps changes; reject reverts them. Git staging, commits, and history are not involved.")
     });
   }
 
   private renderGitFooter(parent: HTMLElement, activeSection: GitReviewSection, enableGitSections: boolean) {
     const footer = parent.createDiv("codex-agent-git-review-footer");
     const sectionLabels: Record<GitReviewSection, string> = {
-      review: "审查改动",
-      stage: "暂存变更",
-      commit: "提交版本",
-      history: "版本记录"
+      review: this.tr("审查改动", "Change review"),
+      stage: this.tr("暂存变更", "Stage changes"),
+      commit: this.tr("提交版本", "Commit version"),
+      history: this.tr("版本记录", "Version history")
     };
     const summary = footer.createDiv("codex-agent-git-review-footer-summary");
-    summary.createSpan({ text: enableGitSections ? `当前 ${sectionLabels[activeSection]}` : "当前 只审查改动" });
+    summary.createSpan({ text: enableGitSections ? `${this.tr("当前", "Current")} ${sectionLabels[activeSection]}` : this.tr("当前 只审查改动", "Current: review only") });
   }
 
   private getGitReviewAggregate(files: DiffFileView[]) {
@@ -4678,16 +4741,16 @@ class CodexAgentView extends ItemView {
 
   private getDiffFileReviewStatus(file: DiffFileView): { key: string; label: string } {
     if (this.gitDiffRejectedFiles.has(file.path)) {
-      return { key: "rejected", label: "已拒绝" };
+      return { key: "rejected", label: this.tr("已拒绝", "Rejected") };
     }
     if (this.gitDiffAcceptedFiles.has(file.path)) {
-      return { key: "accepted", label: "已接受" };
+      return { key: "accepted", label: this.tr("已接受", "Accepted") };
     }
     const acceptedHunks = file.hunks.filter((hunk) => this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, hunk.id))).length;
     if (acceptedHunks > 0) {
-      return { key: acceptedHunks >= file.hunks.length ? "accepted" : "partial", label: acceptedHunks >= file.hunks.length ? "已接受" : "部分接受" };
+      return { key: acceptedHunks >= file.hunks.length ? "accepted" : "partial", label: acceptedHunks >= file.hunks.length ? this.tr("已接受", "Accepted") : this.tr("部分接受", "Partially accepted") };
     }
-    return { key: "pending", label: "未处理" };
+    return { key: "pending", label: this.tr("未处理", "Pending") };
   }
 
   private renderDiffFileHunks(parent: HTMLElement, file: DiffFileView, onChange: () => void) {
@@ -4841,13 +4904,13 @@ class CodexAgentView extends ItemView {
     activeView.contentEl.prepend(bar);
     this.gitDiffEditorReviewBarEl = bar;
     const title = bar.createDiv("codex-agent-editor-review-title");
-    title.createSpan({ cls: "codex-agent-editor-review-kicker", text: "正在审查" });
+    title.createSpan({ cls: "codex-agent-editor-review-kicker", text: this.tr("正在审查", "Reviewing") });
     title.createSpan({ cls: "codex-agent-editor-review-file", text: this.cleanDiffPath(file.path) });
     const counts = title.createSpan("codex-agent-diff-file-counts");
     this.renderDiffCounts(counts, file.added, file.removed, false);
     const actions = bar.createDiv("codex-agent-editor-review-actions");
     const fileHasAcceptedReview = this.hasAcceptedDiffReviewInFile(file);
-    const acceptAll = actions.createEl("button", { cls: "codex-agent-diff-action", text: fileHasAcceptedReview ? "已全部接受" : "全部接受", attr: { type: "button" } });
+    const acceptAll = actions.createEl("button", { cls: "codex-agent-diff-action", text: fileHasAcceptedReview ? this.tr("已全部接受", "All accepted") : this.tr("全部接受", "Accept all"), attr: { type: "button" } });
     acceptAll.disabled = fileHasAcceptedReview;
     acceptAll.setAttr("title", fileHasAcceptedReview ? "已接受的改动不会再显示为待处理 diff" : "接受全部改动");
     acceptAll.addEventListener("click", () => {
@@ -4863,7 +4926,7 @@ class CodexAgentView extends ItemView {
         void this.reloadActiveGitDiffPanel();
         this.renderGitDiffEditorReviewBar(file);
       });
-    const rejectAll = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "全部拒绝", attr: { type: "button" } });
+    const rejectAll = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: this.tr("全部拒绝", "Reject all"), attr: { type: "button" } });
     rejectAll.disabled = fileHasAcceptedReview;
     rejectAll.setAttr("title", fileHasAcceptedReview ? "已有接受记录，不能再全部拒绝" : "拒绝全部改动");
     rejectAll.addEventListener("click", () => {
@@ -4872,11 +4935,11 @@ class CodexAgentView extends ItemView {
       }
       void this.rejectDiffFile(file);
     });
-    actions.createEl("button", { cls: "codex-agent-diff-action", text: "上一处", attr: { type: "button" } })
+    actions.createEl("button", { cls: "codex-agent-diff-action", text: this.tr("上一处", "Previous"), attr: { type: "button" } })
       .addEventListener("click", () => this.focusAdjacentDiffHunk(file, -1));
-    actions.createEl("button", { cls: "codex-agent-diff-action", text: "下一处", attr: { type: "button" } })
+    actions.createEl("button", { cls: "codex-agent-diff-action", text: this.tr("下一处", "Next"), attr: { type: "button" } })
       .addEventListener("click", () => this.focusAdjacentDiffHunk(file, 1));
-    actions.createEl("button", { cls: "codex-agent-diff-action", text: "关闭审查窗口", attr: { type: "button" } })
+    actions.createEl("button", { cls: "codex-agent-diff-action", text: this.tr("关闭审查窗口", "Close review tab"), attr: { type: "button" } })
       .addEventListener("click", () => this.closeReviewEditorLeaf(activeView));
 
     const overview = bar.createDiv("codex-agent-editor-review-overview");
@@ -5398,7 +5461,7 @@ class CodexAgentView extends ItemView {
       this.liveDiffEl.removeClass("is-visible");
       return;
     }
-    const stats = this.currentDiffStats;
+    const stats = this.getActiveRunState()?.currentDiffStats;
     if (!stats || stats.files.length === 0) {
       this.liveDiffEl.removeClass("is-visible");
       return;
@@ -5673,6 +5736,7 @@ class CodexAgentView extends ItemView {
       this.contextChips = this.contextChips.filter((item) => item.id !== normalized.id);
       chipEl.remove();
       this.updatePromptEmptyState();
+      this.saveComposerDraftToActiveSession();
     });
     return chipEl;
   }
@@ -5811,11 +5875,8 @@ class CodexAgentView extends ItemView {
     if (!this.promptInput) {
       return;
     }
-    if (this.runningProcess) {
-      new Notice("Codex is already running. Wait for the current Agent task to finish first.");
-      return;
-    }
     const session = this.createSession();
+    this.saveComposerDraftToActiveSession();
     this.sessions = [...this.sessions, session];
     this.activeSessionId = session.id;
     this.mode = "agent";
@@ -5824,6 +5885,7 @@ class CodexAgentView extends ItemView {
     this.renderSessionTabs();
     this.renderTimelineItems();
     this.renderTokenUsage();
+    this.updateRunButtonDisabledState();
     this.updateComposerControls();
     this.insertPromptText(prompt);
     new Notice(notice);
@@ -6444,6 +6506,7 @@ class CodexAgentView extends ItemView {
     this.promptInput.toggleClass("is-empty", isEmpty);
     this.promptPlaceholderEl?.toggleClass("is-visible", isEmpty);
     this.updateRunButtonDisabledState();
+    this.saveComposerDraftToActiveSession();
   }
 
   private hasPromptText() {
@@ -6451,10 +6514,10 @@ class CodexAgentView extends ItemView {
   }
 
   private updateRunButtonDisabledState() {
-    if (!this.runButton || this.runningProcess) {
+    if (!this.runButton) {
       return;
     }
-    this.runButton.disabled = !this.hasPromptText();
+    this.setRunButtonRunning(this.isSessionRunning(this.activeSessionId));
   }
 
   private handlePromptKeydown(event: KeyboardEvent) {
@@ -6466,24 +6529,12 @@ class CodexAgentView extends ItemView {
     }
 
     event.preventDefault();
-    if (!this.runningProcess) {
-      this.runCodex();
-    }
+    this.runCodex();
   }
 
   private async runCodex() {
-    if (this.runningProcess) {
-      this.isCancellingRun = true;
-      this.runningProcess.cancel();
-      this.runningProcess = null;
-      this.setRunButtonRunning(false);
-      this.stopElapsedTimer();
-      this.activeResponseItemId = null;
-      this.activeResponseItemIndex = null;
-      this.currentDiffStats = null;
-      this.renderLiveDiff();
-      this.finishRunStatus("Stopped", "Codex process was stopped by the user.");
-      this.runningSessionId = null;
+    if (this.isSessionRunning(this.activeSessionId)) {
+      this.cancelRun(this.activeSessionId);
       return;
     }
 
@@ -6507,9 +6558,9 @@ class CodexAgentView extends ItemView {
         return `${item.kind}: ${item.path}`;
       }).join("; ")
       : "no attached context";
-    this.currentRunMetaDetail = this.formatRunMetaDetail();
+    const runMetaDetail = this.formatRunMetaDetail();
     const contextStatusDetail = attached > 0 ? `Read ${attached} context items: ${summary}` : "No context attached";
-    const initialStatusBody = this.formatRunStatusBody(contextStatusDetail);
+    const initialStatusBody = [runMetaDetail, contextStatusDetail].filter(Boolean).join("\n");
 
     const session = this.getActiveSession();
     if (!this.hasStartedConversation(session)) {
@@ -6540,18 +6591,10 @@ class CodexAgentView extends ItemView {
     ];
     session.statusItemIndex = session.timeline.length - 1;
     session.runStartedAt = Date.now();
-    this.currentRunStatusTitle = "Thinking";
-    this.currentRunStatusBody = initialStatusBody;
-    this.runningSessionId = session.id;
-    this.isCancellingRun = false;
-    this.activeResponseItemId = null;
-    this.activeResponseItemIndex = null;
-    this.exploredFiles = new Set<string>();
-    this.currentDiffStats = null;
+    const runId = `${session.id}:${session.runStartedAt}`;
     this.renderLiveDiff();
     this.persistSessions();
     this.renderSessionTabs();
-    this.startElapsedTimer();
 
     this.renderTimelineItems();
 
@@ -6578,7 +6621,7 @@ class CodexAgentView extends ItemView {
     const extraPath = this.buildRuntimeExtraPath(settings);
     const adapter = this.getCodexAdapter();
     const promptText = this.composeCodexPrompt(payload);
-    this.runningProcess = adapter.start(
+    const handle = adapter.start(
       {
         codexBin,
         extraPath,
@@ -6591,9 +6634,23 @@ class CodexAgentView extends ItemView {
         approvalPolicy: this.mode === "agent" ? "on-request" : "never",
         reasoningEffort: this.toCodexReasoningEffort(this.reasoningLevel)
       },
-      (event) => this.handleAgentEvent(event),
-      (code) => this.handleAgentClose(code)
+      (event) => this.handleAgentEvent(session.id, runId, event),
+      (code) => this.handleAgentClose(session.id, runId, code)
     );
+    this.runningProcesses.set(session.id, {
+      runId,
+      handle,
+      isCancelling: false,
+      activeResponseItemId: null,
+      activeResponseItemIndex: null,
+      exploredFiles: new Set<string>(),
+      currentDiffStats: null,
+      statusTitle: "Thinking",
+      statusBody: initialStatusBody,
+      metaDetail: runMetaDetail
+    });
+    this.renderSessionTabs();
+    this.startElapsedTimer(session.id);
     this.setRunButtonRunning(true);
     this.setLiveStatus("thinking", "Thinking");
     this.clearComposer();
@@ -6610,6 +6667,57 @@ class CodexAgentView extends ItemView {
       return "";
     }
     return trimmed.slice(0, index);
+  }
+
+  private saveComposerDraftToActiveSession() {
+    if (this.isRestoringComposer) {
+      return;
+    }
+    const session = this.getActiveSession();
+    const draft = this.getComposerDraftParts();
+    session.draftMessageParts = draft.length > 0 ? draft : undefined;
+  }
+
+  private getComposerDraftParts() {
+    if (!this.promptInput) {
+      return [];
+    }
+    const hasText = this.stripPromptControlText(this.promptInput.innerText).trim().length > 0;
+    const hasChip = Boolean(this.promptInput.querySelector(".codex-agent-chip"));
+    return hasText || hasChip ? this.getPromptMessageParts() : [];
+  }
+
+  private restoreComposerDraftFromActiveSession() {
+    if (!this.promptInput) {
+      return;
+    }
+    this.closePromptPicker();
+    this.isRestoringComposer = true;
+    try {
+      this.contextChips = [];
+      this.promptInput.empty();
+      const parts = this.getActiveSession().draftMessageParts ?? [];
+      parts.forEach((part) => {
+        if (part.type === "text") {
+          this.promptInput?.appendChild(document.createTextNode(part.text));
+          return;
+        }
+        const chip = this.normalizeContextChip({
+          id: part.chip.id,
+          kind: part.chip.kind,
+          label: part.chip.label,
+          detail: part.chip.detail,
+          path: part.chip.path,
+          text: part.chip.text
+        });
+        this.contextChips.push(chip);
+        this.promptInput?.appendChild(this.createPromptChipElement(chip));
+        this.promptInput?.appendChild(document.createTextNode("\u200B"));
+      });
+      this.updatePromptEmptyState();
+    } finally {
+      this.isRestoringComposer = false;
+    }
   }
 
   private getPromptText() {
@@ -6707,6 +6815,7 @@ class CodexAgentView extends ItemView {
   private clearComposer() {
     this.closePromptPicker();
     this.contextChips = [];
+    this.getActiveSession().draftMessageParts = undefined;
     if (this.promptInput) {
       this.promptInput.empty();
       this.updatePromptEmptyState();
@@ -6910,7 +7019,17 @@ class CodexAgentView extends ItemView {
     return new ExecJsonAdapter();
   }
 
-  private handleAgentEvent(event: AgentEvent) {
+  private handleAgentEvent(sessionId: string, runId: string, event: AgentEvent) {
+    const runState = this.getRunState(sessionId, runId);
+    if (!runState) {
+      return;
+    }
+
+    this.withRunContext(sessionId, runState, () => this.handleAgentEventForRun(event));
+  }
+
+  private handleAgentEventForRun(event: AgentEvent) {
+
     if (event.type === "thread") {
       const session = this.getTargetSession();
       session.codexThreadId = event.threadId;
@@ -7017,8 +7136,8 @@ class CodexAgentView extends ItemView {
 
     if (event.state === "done") {
       this.markActiveResponseComplete();
-      if (this.currentDiffStats) {
-        this.upsertDiffTimelineItem(this.currentDiffStats.diffText, true);
+      if (this.currentRunState?.currentDiffStats) {
+        this.upsertDiffTimelineItem(this.currentRunState.currentDiffStats.diffText, true);
       }
     }
     this.setLiveStatus(event.state, event.title);
@@ -7062,13 +7181,14 @@ class CodexAgentView extends ItemView {
     }
 
     if (event.filePath) {
-      this.exploredFiles.add(event.filePath);
+      this.currentRunState?.exploredFiles.add(event.filePath);
       this.upsertReadSummaryTimelineItem();
     }
 
     const session = this.getTargetSession();
-    const exploredSummary = this.exploredFiles.size > 0
-      ? `Explored ${this.exploredFiles.size} files`
+    const exploredFiles = this.currentRunState?.exploredFiles ?? new Set<string>();
+    const exploredSummary = exploredFiles.size > 0
+      ? `Explored ${exploredFiles.size} files`
       : "";
     const detail = [event.detail, exploredSummary].filter(Boolean).join("\n");
     const existingIndex = session.timeline.findIndex((item) => item.toolItemId === event.itemId);
@@ -7131,7 +7251,7 @@ class CodexAgentView extends ItemView {
 
   private upsertReadSummaryTimelineItem() {
     const session = this.getTargetSession();
-    const files = [...this.exploredFiles].sort();
+    const files = [...(this.currentRunState?.exploredFiles ?? new Set<string>())].sort();
     const itemId = `read-summary:${session.id}:${session.runStartedAt}`;
     const existingIndex = session.timeline.findIndex((item) => item.toolItemId === itemId);
     const item: TimelineItem = {
@@ -7157,7 +7277,9 @@ class CodexAgentView extends ItemView {
     if (stats.files.length === 0) {
       return;
     }
-    this.currentDiffStats = { ...stats, diffText };
+    if (this.currentRunState) {
+      this.currentRunState.currentDiffStats = { ...stats, diffText };
+    }
     this.renderLiveDiff();
   }
 
@@ -7193,7 +7315,9 @@ class CodexAgentView extends ItemView {
       session.timeline = [...session.timeline, item];
     }
 
-    this.currentDiffStats = { ...stats, diffText };
+    if (this.currentRunState) {
+      this.currentRunState.currentDiffStats = { ...stats, diffText };
+    }
     session.updatedAt = Date.now();
     this.persistSessions();
     if (session.id === this.activeSessionId) {
@@ -7385,8 +7509,12 @@ class CodexAgentView extends ItemView {
 
   private appendOrUpdateResponseDelta(itemId: string, delta: string) {
     const session = this.getTargetSession();
-    if (this.activeResponseItemId !== itemId || this.activeResponseItemIndex === null || !session.timeline[this.activeResponseItemIndex]) {
-      this.activeResponseItemId = itemId;
+    const runState = this.currentRunState;
+    if (!runState) {
+      return;
+    }
+    if (runState.activeResponseItemId !== itemId || runState.activeResponseItemIndex === null || !session.timeline[runState.activeResponseItemIndex]) {
+      runState.activeResponseItemId = itemId;
       session.timeline = [
         ...session.timeline,
         {
@@ -7396,10 +7524,10 @@ class CodexAgentView extends ItemView {
           streaming: true
         }
       ];
-      this.activeResponseItemIndex = session.timeline.length - 1;
+      runState.activeResponseItemIndex = session.timeline.length - 1;
     }
 
-    const index = this.activeResponseItemIndex;
+    const index = runState.activeResponseItemIndex;
     if (index === null || !session.timeline[index]) {
       return;
     }
@@ -7431,8 +7559,9 @@ class CodexAgentView extends ItemView {
     }
 
     const session = this.getTargetSession();
-    if (this.activeResponseItemIndex !== null && session.timeline[this.activeResponseItemIndex]?.tone === "response") {
-      session.timeline[this.activeResponseItemIndex].streaming = false;
+    const runState = this.currentRunState;
+    if (runState?.activeResponseItemIndex !== null && runState?.activeResponseItemIndex !== undefined && session.timeline[runState.activeResponseItemIndex]?.tone === "response") {
+      session.timeline[runState.activeResponseItemIndex].streaming = false;
       session.updatedAt = Date.now();
       this.persistSessions();
       if (session.id === this.activeSessionId) {
@@ -7640,11 +7769,15 @@ class CodexAgentView extends ItemView {
       session.title,
       this.formatApprovalTitle(approval),
       () => {
+        this.saveComposerDraftToActiveSession();
         this.activeSessionId = approval.sessionId;
+        this.restoreComposerDraftFromActiveSession();
         this.persistSessions();
         this.app.workspace.revealLeaf(this.leaf);
         this.renderSessionTabs();
         this.renderTimelineItems();
+        this.renderTokenUsage();
+        this.updateRunButtonDisabledState();
       }
     );
     this.activeApprovalModal.open();
@@ -7705,49 +7838,105 @@ class CodexAgentView extends ItemView {
     return "Canceled";
   }
 
-  private handleAgentClose(code: number | null) {
-    if (this.isCancellingRun) {
-      this.isCancellingRun = false;
-      this.runningProcess = null;
-      this.runningSessionId = null;
-      this.activeResponseItemId = null;
-      this.activeResponseItemIndex = null;
-      this.setRunButtonRunning(false);
-      this.stopElapsedTimer();
-      this.currentDiffStats = null;
-      this.renderLiveDiff();
-      this.finishRunStatus("Stopped", "Codex process was stopped by the user.");
-      this.persistSessions();
+  private handleAgentClose(sessionId: string, runId: string, code: number | null) {
+    const runState = this.getRunState(sessionId, runId);
+    if (!runState) {
       return;
     }
 
-    this.runningProcess = null;
-    this.runningSessionId = null;
-    this.activeResponseItemId = null;
-    this.activeResponseItemIndex = null;
-    this.setRunButtonRunning(false);
-    this.stopElapsedTimer();
-    void this.renderGitChanges();
-    this.markActiveResponseComplete();
-    this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "Completed" : "Run failed");
-    if (code !== 0) {
-      this.finishRunStatus("Run failed", `Codex exited with code ${code ?? "unknown"}.`);
-    } else {
-      this.updateTranscriptStatus(this.getProcessedStatusTitle(), "");
+    if (runState.isCancelling) {
+      this.finishCancelledRun(sessionId);
+      return;
     }
+
+    this.runningProcesses.delete(sessionId);
+    this.stopElapsedTimer(sessionId);
+    void this.renderGitChanges();
+    this.withRunContext(sessionId, runState, () => {
+      this.markActiveResponseComplete();
+      this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "Completed" : "Run failed");
+      if (code !== 0) {
+        this.finishRunStatus("Run failed", `Codex exited with code ${code ?? "unknown"}.`);
+      } else {
+        this.updateTranscriptStatus(this.getProcessedStatusTitle(), "");
+      }
+    });
+    this.updateRunButtonDisabledState();
+    this.renderSessionTabs();
     this.persistSessions();
   }
 
+  private getRunState(sessionId: string, runId: string) {
+    const runState = this.runningProcesses.get(sessionId);
+    return runState?.runId === runId ? runState : null;
+  }
+
+  private getActiveRunState() {
+    return this.runningProcesses.get(this.activeSessionId) ?? null;
+  }
+
+  private isSessionRunning(sessionId: string) {
+    return this.runningProcesses.has(sessionId);
+  }
+
+  private finishCancelledRun(sessionId: string) {
+    const runState = this.runningProcesses.get(sessionId);
+    if (!runState) {
+      return;
+    }
+    this.runningProcesses.delete(sessionId);
+    this.stopElapsedTimer(sessionId);
+    runState.currentDiffStats = null;
+    this.withRunContext(sessionId, runState, () => {
+      this.markActiveResponseComplete();
+      this.renderLiveDiff();
+      this.finishRunStatus("Stopped", "Codex process was stopped by the user.");
+    });
+    this.updateRunButtonDisabledState();
+    this.renderSessionTabs();
+    this.persistSessions();
+  }
+
+  private cancelRun(sessionId: string) {
+    const runState = this.runningProcesses.get(sessionId);
+    if (!runState) {
+      return;
+    }
+    runState.isCancelling = true;
+    runState.handle.cancel();
+    this.finishCancelledRun(sessionId);
+  }
+
+  private withRunContext<T>(sessionId: string, runState: AgentRunState, callback: () => T): T {
+    const previousRunningSessionId = this.runningSessionId;
+    const previousRunState = this.currentRunState;
+    this.runningSessionId = sessionId;
+    this.currentRunState = runState;
+    try {
+      return callback();
+    } finally {
+      this.runningSessionId = previousRunningSessionId;
+      this.currentRunState = previousRunState;
+    }
+  }
+
   private finishRunStatus(title: string, body = "") {
-    this.currentRunStatusTitle = title;
-    this.currentRunStatusBody = body;
+    const runState = this.currentRunState;
+    if (runState) {
+      runState.statusTitle = title;
+      runState.statusBody = body;
+    }
     this.updateTranscriptStatus(title, body);
   }
 
   private updateWorkingTranscriptStatus(title: string, body = "") {
-    this.currentRunStatusTitle = title;
-    this.currentRunStatusBody = this.formatRunStatusBody(body);
-    this.updateTranscriptStatus(title, this.currentRunStatusBody);
+    const formattedBody = this.formatRunStatusBody(body);
+    const runState = this.currentRunState;
+    if (runState) {
+      runState.statusTitle = title;
+      runState.statusBody = formattedBody;
+    }
+    this.updateTranscriptStatus(title, formattedBody);
   }
 
   private formatRunMetaDetail() {
@@ -7755,7 +7944,7 @@ class CodexAgentView extends ItemView {
   }
 
   private formatRunStatusBody(detail = "") {
-    return [this.currentRunMetaDetail, detail].filter(Boolean).join("\n");
+    return [this.currentRunState?.metaDetail, detail].filter(Boolean).join("\n");
   }
 
   private getProcessedStatusTitle() {
@@ -7764,6 +7953,9 @@ class CodexAgentView extends ItemView {
 
   private setLiveStatus(status: "idle" | "thinking" | "running" | "done" | "error", text: string) {
     if (!this.liveStatusEl || !this.liveStatusTextEl) {
+      return;
+    }
+    if (this.runningSessionId && this.runningSessionId !== this.activeSessionId) {
       return;
     }
 
@@ -7807,8 +7999,11 @@ class CodexAgentView extends ItemView {
     const [item] = session.timeline.splice(index, 1);
     session.timeline.push(item);
     session.statusItemIndex = session.timeline.length - 1;
-    if (this.activeResponseItemIndex !== null && session.id === this.runningSessionId && index < this.activeResponseItemIndex) {
-      this.activeResponseItemIndex -= 1;
+    if (this.currentRunState?.activeResponseItemIndex !== null
+      && this.currentRunState?.activeResponseItemIndex !== undefined
+      && session.id === this.runningSessionId
+      && index < this.currentRunState.activeResponseItemIndex) {
+      this.currentRunState.activeResponseItemIndex -= 1;
     }
   }
 
@@ -7827,16 +8022,30 @@ class CodexAgentView extends ItemView {
     return `${minutes}m ${seconds}s`;
   }
 
-  private startElapsedTimer() {
-    this.stopElapsedTimer();
-    this.elapsedTimer = window.setInterval(() => {
-      if (this.runningProcess) {
-        this.updateTranscriptStatus(this.currentRunStatusTitle, this.currentRunStatusBody);
+  private startElapsedTimer(sessionId: string) {
+    this.stopElapsedTimer(sessionId);
+    const timer = window.setInterval(() => {
+      const runState = this.runningProcesses.get(sessionId);
+      if (runState) {
+        this.withRunContext(sessionId, runState, () => {
+          this.updateTranscriptStatus(runState.statusTitle, runState.statusBody);
+        });
       }
     }, 1000);
+    this.elapsedTimers.set(sessionId, timer);
   }
 
-  private stopElapsedTimer() {
+  private stopElapsedTimer(sessionId?: string) {
+    if (sessionId) {
+      const timer = this.elapsedTimers.get(sessionId);
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        this.elapsedTimers.delete(sessionId);
+      }
+      return;
+    }
+    this.elapsedTimers.forEach((timer) => window.clearInterval(timer));
+    this.elapsedTimers.clear();
     if (this.elapsedTimer !== null) {
       window.clearInterval(this.elapsedTimer);
       this.elapsedTimer = null;
@@ -7879,25 +8088,22 @@ class CodexAgentView extends ItemView {
 
   private addSession() {
     const session = this.createSession();
+    this.saveComposerDraftToActiveSession();
     this.sessions = [...this.sessions, session];
     this.activeSessionId = session.id;
+    this.restoreComposerDraftFromActiveSession();
     this.persistSessions();
     this.renderSessionTabs();
     this.renderTimelineItems();
     this.renderTokenUsage();
+    this.updateRunButtonDisabledState();
   }
 
   private closeSession(sessionId: string) {
+    this.saveComposerDraftToActiveSession();
     const closingSession = this.sessions.find((session) => session.id === sessionId);
-    if (this.runningSessionId === sessionId && this.runningProcess) {
-      this.isCancellingRun = true;
-      this.runningProcess.cancel();
-      this.runningProcess = null;
-      this.runningSessionId = null;
-      this.activeResponseItemId = null;
-      this.activeResponseItemIndex = null;
-      this.stopElapsedTimer();
-      this.setRunButtonRunning(false);
+    if (this.isSessionRunning(sessionId)) {
+      this.cancelRun(sessionId);
     }
 
     if (closingSession && this.hasStartedConversation(closingSession)) {
@@ -7917,22 +8123,18 @@ class CodexAgentView extends ItemView {
     if (!this.sessions.some((session) => session.id === this.activeSessionId)) {
       this.activeSessionId = this.sessions[0].id;
     }
+    this.restoreComposerDraftFromActiveSession();
     this.persistSessions();
     this.renderSessionTabs();
     this.renderTimelineItems();
     this.renderTokenUsage();
+    this.updateRunButtonDisabledState();
   }
 
   private deleteHistorySession(sessionId: string) {
-    if (this.runningSessionId === sessionId && this.runningProcess) {
-      this.isCancellingRun = true;
-      this.runningProcess.cancel();
-      this.runningProcess = null;
-      this.runningSessionId = null;
-      this.activeResponseItemId = null;
-      this.activeResponseItemIndex = null;
-      this.stopElapsedTimer();
-      this.setRunButtonRunning(false);
+    this.saveComposerDraftToActiveSession();
+    if (this.isSessionRunning(sessionId)) {
+      this.cancelRun(sessionId);
     }
 
     this.sessions = this.sessions.filter((session) => session.id !== sessionId);
@@ -7943,10 +8145,12 @@ class CodexAgentView extends ItemView {
     if (!this.sessions.some((session) => session.id === this.activeSessionId)) {
       this.activeSessionId = this.sessions[0].id;
     }
+    this.restoreComposerDraftFromActiveSession();
     this.persistSessions();
     this.renderSessionTabs();
     this.renderTimelineItems();
     this.renderTokenUsage();
+    this.updateRunButtonDisabledState();
   }
 
   private persistSessions() {
