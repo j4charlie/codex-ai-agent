@@ -12,6 +12,8 @@ const context = await esbuild.context({
   external: [
     "obsidian",
     "electron",
+    "@codemirror/state",
+    "@codemirror/view",
     "child_process",
     "fs",
     "path",

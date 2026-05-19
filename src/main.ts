@@ -1,5 +1,6 @@
 import {
   Editor,
+  editorInfoField,
   ItemView,
   MarkdownView,
   MarkdownRenderer,
@@ -15,6 +16,8 @@ import {
   TFolder,
   WorkspaceLeaf
 } from "obsidian";
+import { StateEffect, StateField } from "@codemirror/state";
+import { Decoration, DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 
 declare const require: any;
 declare const process: any;
@@ -27,7 +30,10 @@ const VIEW_TYPE_CODEX_AGENT = "codex-agent-view";
 const DEFAULT_CODEX_BIN = "codex";
 const PLUGIN_ID = "codex-ai-agent";
 const PLUGIN_NAME = "Codex AI Agent";
-const PLUGIN_VERSION = "0.1.6";
+const PLUGIN_VERSION = "0.1.7";
+const AGENT_DATA_DIR_NAME = ".codexaiagent";
+const LEGACY_AGENT_DATA_DIR_NAMES = [".codeaiagent"];
+const AGENT_DATA_FILE_NAME = "data.json";
 const GITHUB_URL = "https://github.com/j4charlie/codex-ai-agent";
 const GITHUB_ISSUES_URL = `${GITHUB_URL}/issues`;
 const CODEX_MESSAGE_PARTS_MIME = "application/x-codex-agent-message-parts";
@@ -57,6 +63,8 @@ const DEFAULT_SETTINGS: AgentPluginSettings = {
   stickyUserPrompts: true,
   compactCommandGroups: true,
   diffLineNumbers: true,
+  enableDiffReview: true,
+  enableGitManagement: true,
   pastedImageBehavior: "chip",
   chatViewLocation: "right-pane",
   chatFontSize: 15
@@ -93,7 +101,9 @@ type ModelChoice = "GPT-5.5" | "GPT-5.4" | "GPT-5.4 Mini" | "GPT-5.3 Codex";
 type AdapterMode = "app-server" | "exec-json" | "pty";
 type ExternalPathAccess = "ask-each-time" | "allow-session" | "deny";
 type ChatViewLocation = "right-pane" | "left-pane" | "new-leaf";
-type TurnAuxMode = "auto" | "plan" | "confirm-first" | "deep-questions";
+type TurnAuxMode = "auto" | "plan" | "confirm-first" | "mirror-not-echo" | "deep-questions";
+type GitReviewSection = "review" | "stage" | "commit" | "history";
+type DiffReviewFilter = "active" | "accepted" | "rejected" | "all";
 
 interface AgentPluginSettings {
   codexBin: string;
@@ -112,6 +122,8 @@ interface AgentPluginSettings {
   stickyUserPrompts: boolean;
   compactCommandGroups: boolean;
   diffLineNumbers: boolean;
+  enableDiffReview: boolean;
+  enableGitManagement: boolean;
   pastedImageBehavior: "chip";
   chatViewLocation: ChatViewLocation;
   chatFontSize: number;
@@ -154,11 +166,322 @@ interface DiffLineView {
   text: string;
 }
 
-interface DiffFileView {
-  path: string;
+interface DiffHunkView {
+  id: string;
+  header: string;
   added: number;
   removed: number;
   lines: DiffLineView[];
+  rawLines: string[];
+}
+
+interface DiffFileView {
+  path: string;
+  oldPath: string;
+  headerLines: string[];
+  added: number;
+  removed: number;
+  lines: DiffLineView[];
+  hunks: DiffHunkView[];
+}
+
+interface DiffReviewPersistedState {
+  acceptedFiles: string[];
+  acceptedHunks: string[];
+  acceptedLines: string[];
+  rejectedFiles: string[];
+}
+
+interface InlineDiffReviewSnapshot {
+  file: DiffFileView;
+  acceptedFiles: string[];
+  acceptedHunks: string[];
+  acceptedLines: string[];
+}
+
+interface InlineDiffAction {
+  action: "accept-hunk" | "reject-hunk" | "accept-line" | "reject-line";
+  filePath: string;
+  hunkId: string;
+  lineKey?: string;
+}
+
+let activeInlineDiffReviewController: { handleInlineDiffAction(action: InlineDiffAction): void } | null = null;
+
+const setInlineDiffReviewEffect = StateEffect.define<InlineDiffReviewSnapshot | null>();
+const inlineDiffReviewField = StateField.define<InlineDiffReviewSnapshot | null>({
+  create: () => null,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setInlineDiffReviewEffect)) {
+        return effect.value;
+      }
+    }
+    return value;
+  }
+});
+
+const inlineDiffReviewDecorations = EditorView.decorations.compute([inlineDiffReviewField], (state) => {
+  const snapshot = state.field(inlineDiffReviewField, false);
+  if (!snapshot) {
+    return Decoration.none;
+  }
+  return buildInlineDiffDecorations(state, snapshot);
+});
+
+const inlineDiffReviewExtension = [inlineDiffReviewField, inlineDiffReviewDecorations];
+
+class InlineDiffHunkWidget extends WidgetType {
+  constructor(
+    private filePath: string,
+    private hunk: DiffHunkView,
+    private index: number,
+    private accepted: boolean
+  ) {
+    super();
+  }
+
+  eq(other: WidgetType) {
+    return other instanceof InlineDiffHunkWidget
+      && other.filePath === this.filePath
+      && other.hunk.id === this.hunk.id
+      && other.accepted === this.accepted;
+  }
+
+  toDOM() {
+    const row = document.createElement("div");
+    row.className = `codex-agent-cm-diff-hunk ${this.accepted ? "is-accepted" : ""}`;
+    const label = row.createSpan({ cls: "codex-agent-cm-diff-hunk-label", text: `Hunk ${this.index + 1}` });
+    label.setAttr("title", this.hunk.header);
+    row.createSpan({ cls: "codex-agent-cm-diff-count is-add", text: `+${this.hunk.added}` });
+    row.createSpan({ cls: "codex-agent-cm-diff-count is-remove", text: `-${this.hunk.removed}` });
+    row.appendChild(this.createAction("✓", "接受此 hunk", "accept-hunk"));
+    row.appendChild(this.createAction("×", "拒绝此 hunk", "reject-hunk", true));
+    return row;
+  }
+
+  private createAction(text: string, title: string, action: InlineDiffAction["action"], danger = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `codex-agent-cm-diff-action ${danger ? "is-danger" : ""}`;
+    button.textContent = text;
+    button.title = title;
+    button.disabled = this.accepted && action === "accept-hunk";
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      activeInlineDiffReviewController?.handleInlineDiffAction({
+        action,
+        filePath: this.filePath,
+        hunkId: this.hunk.id
+      });
+    });
+    return button;
+  }
+}
+
+class InlineDiffLineControlWidget extends WidgetType {
+  constructor(
+    private action: InlineDiffAction,
+    private marker: string,
+    private accepted: boolean
+  ) {
+    super();
+  }
+
+  eq(other: WidgetType) {
+    return other instanceof InlineDiffLineControlWidget
+      && other.action.action === this.action.action
+      && other.action.filePath === this.action.filePath
+      && other.action.hunkId === this.action.hunkId
+      && other.action.lineKey === this.action.lineKey
+      && other.accepted === this.accepted;
+  }
+
+  toDOM() {
+    const wrap = document.createElement("span");
+    wrap.className = `codex-agent-cm-diff-inline-controls ${this.accepted ? "is-accepted" : ""}`;
+    wrap.createSpan({ cls: "codex-agent-cm-diff-marker", text: this.marker });
+    wrap.appendChild(this.createButton("✓", "接受这一行", "accept-line"));
+    wrap.appendChild(this.createButton("×", "拒绝这一行", "reject-line", true));
+    return wrap;
+  }
+
+  private createButton(text: string, title: string, action: InlineDiffAction["action"], danger = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `codex-agent-cm-diff-action ${danger ? "is-danger" : ""}`;
+    button.textContent = text;
+    button.title = title;
+    button.disabled = this.accepted && action === "accept-line";
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      activeInlineDiffReviewController?.handleInlineDiffAction({
+        ...this.action,
+        action
+      });
+    });
+    return button;
+  }
+}
+
+class InlineDiffRemovedLineWidget extends WidgetType {
+  constructor(
+    private action: InlineDiffAction,
+    private text: string,
+    private oldLine?: number
+  ) {
+    super();
+  }
+
+  eq(other: WidgetType) {
+    return other instanceof InlineDiffRemovedLineWidget
+      && other.action.filePath === this.action.filePath
+      && other.action.hunkId === this.action.hunkId
+      && other.action.lineKey === this.action.lineKey
+      && other.text === this.text
+      && other.oldLine === this.oldLine;
+  }
+
+  toDOM() {
+    const row = document.createElement("div");
+    row.className = "codex-agent-cm-diff-removed-line";
+    row.createSpan({ cls: "codex-agent-cm-diff-removed-marker", text: "-" });
+    row.createSpan({ cls: "codex-agent-cm-diff-removed-number", text: this.oldLine ? String(this.oldLine) : "" });
+    row.createSpan({ cls: "codex-agent-cm-diff-removed-code", text: this.text || " " });
+    const actions = row.createSpan("codex-agent-cm-diff-removed-actions");
+    actions.appendChild(this.createButton("✓", "接受这一行"));
+    actions.appendChild(this.createButton("×", "拒绝这一行", true));
+    return row;
+  }
+
+  private createButton(text: string, title: string, danger = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `codex-agent-cm-diff-action ${danger ? "is-danger" : ""}`;
+    button.textContent = text;
+    button.title = title;
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      activeInlineDiffReviewController?.handleInlineDiffAction({
+        ...this.action,
+        action: danger ? "reject-line" : "accept-line"
+      });
+    });
+    return button;
+  }
+}
+
+function buildInlineDiffDecorations(state: any, snapshot: InlineDiffReviewSnapshot): DecorationSet {
+  const info = state.field(editorInfoField, false);
+  if (info?.file?.path !== snapshot.file.path) {
+    return Decoration.none;
+  }
+  const acceptedFiles = new Set(snapshot.acceptedFiles);
+  const acceptedHunks = new Set(snapshot.acceptedHunks);
+  const acceptedLines = new Set(snapshot.acceptedLines);
+  if (acceptedFiles.has(snapshot.file.path)) {
+    return Decoration.none;
+  }
+  const ranges: any[] = [];
+  snapshot.file.hunks.forEach((hunk, index) => {
+    const hunkAccepted = acceptedFiles.has(snapshot.file.path) || acceptedHunks.has(`${snapshot.file.path}::${hunk.id}`);
+    if (hunkAccepted) {
+      return;
+    }
+    const hunkPos = findInlineHunkPosition(state, hunk);
+    ranges.push(Decoration.widget({
+      widget: new InlineDiffHunkWidget(snapshot.file.path, hunk, index, hunkAccepted),
+      block: true,
+      side: -1
+    }).range(hunkPos));
+    hunk.lines.forEach((line) => {
+      const lineKey = getInlineDiffLineKey(snapshot.file.path, hunk.id, line);
+      const lineAccepted = hunkAccepted || acceptedLines.has(lineKey);
+      if (lineAccepted) {
+        return;
+      }
+      if (line.type === "add" && typeof line.newLine === "number" && line.newLine <= state.doc.lines) {
+        const docLine = state.doc.line(line.newLine);
+        ranges.push(Decoration.line({
+          attributes: { class: `codex-agent-cm-diff-line is-add ${lineAccepted ? "is-accepted" : ""}` }
+        }).range(docLine.from));
+        ranges.push(Decoration.widget({
+          widget: new InlineDiffLineControlWidget({
+            action: "accept-line",
+            filePath: snapshot.file.path,
+            hunkId: hunk.id,
+            lineKey
+          }, "+", lineAccepted),
+          side: -1
+        }).range(docLine.from));
+      } else if (line.type === "remove") {
+        const pos = findInlineRemovedLinePosition(state, hunk, line);
+        ranges.push(Decoration.widget({
+          widget: new InlineDiffRemovedLineWidget({
+            action: "accept-line",
+            filePath: snapshot.file.path,
+            hunkId: hunk.id,
+            lineKey
+          }, line.text, line.oldLine),
+          block: true,
+          side: -1
+        }).range(pos));
+      }
+    });
+  });
+  return Decoration.set(ranges, true);
+}
+
+function findInlineHunkPosition(state: any, hunk: DiffHunkView): number {
+  const firstChange = hunk.lines.find((line) => line.type === "add" || line.type === "remove");
+  if (firstChange) {
+    if (firstChange.type === "add" && firstChange.newLine && firstChange.newLine <= state.doc.lines) {
+      return state.doc.line(firstChange.newLine).from;
+    }
+    if (firstChange.type === "remove") {
+      return findInlineRemovedLinePosition(state, hunk, firstChange);
+    }
+  }
+  const firstContext = hunk.lines.find((line) => (line.type === "context" || line.type === "add") && typeof line.newLine === "number");
+  if (firstContext?.newLine && firstContext.newLine <= state.doc.lines) {
+    return state.doc.line(firstContext.newLine).from;
+  }
+  return Math.min(Math.max(getInlineHunkNewStartLine(hunk) - 1, 0), state.doc.lines) === 0
+    ? 0
+    : state.doc.line(Math.min(getInlineHunkNewStartLine(hunk), state.doc.lines)).from;
+}
+
+function findInlineRemovedLinePosition(state: any, hunk: DiffHunkView, line: DiffLineView): number {
+  const index = hunk.lines.indexOf(line);
+  for (let cursor = index + 1; cursor < hunk.lines.length; cursor += 1) {
+    const next = hunk.lines[cursor];
+    if ((next.type === "context" || next.type === "add") && typeof next.newLine === "number" && next.newLine <= state.doc.lines) {
+      return state.doc.line(next.newLine).from;
+    }
+  }
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const previous = hunk.lines[cursor];
+    if ((previous.type === "context" || previous.type === "add") && typeof previous.newLine === "number" && previous.newLine <= state.doc.lines) {
+      return state.doc.line(previous.newLine).to;
+    }
+  }
+  return findInlineHunkPosition(state, hunk);
+}
+
+function getInlineHunkNewStartLine(hunk: DiffHunkView) {
+  const match = hunk.header.match(/\+(\d+)(?:,\d+)?/);
+  return match ? Number(match[1]) : 1;
+}
+
+function getInlineDiffLineKey(filePath: string, hunkId: string, line: DiffLineView) {
+  const lineNo = line.type === "remove" ? line.oldLine : line.newLine;
+  return `${filePath}::${hunkId}::${line.type}:${lineNo ?? "?"}:${line.text}`;
 }
 
 interface PlanChecklistItem {
@@ -233,6 +556,7 @@ interface AgentPluginData {
   archivedSessions: AgentSession[];
   activeSessionId: string;
   settings: AgentPluginSettings;
+  diffReviewState: DiffReviewPersistedState;
 }
 
 type AgentRuntimeState = "idle" | "thinking" | "running" | "done" | "error";
@@ -1054,6 +1378,12 @@ class AppServerAdapter implements CodexAdapter {
     return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
   }
 
+  private dirname(filePath: string) {
+    const normalized = filePath.replace(/\\/g, "/").replace(/\/+$/, "");
+    const index = normalized.lastIndexOf("/");
+    return index > 0 ? normalized.slice(0, index) : "";
+  }
+
   private handleServerRequest(
     message: any,
     request: CodexRunRequest,
@@ -1252,17 +1582,24 @@ export default class CodexForObsidianPlugin extends Plugin {
     sessions: [],
     archivedSessions: [],
     activeSessionId: "",
-    settings: { ...DEFAULT_SETTINGS }
+    settings: { ...DEFAULT_SETTINGS },
+    diffReviewState: {
+      acceptedFiles: [],
+      acceptedHunks: [],
+      acceptedLines: [],
+      rejectedFiles: []
+    }
   };
 
   async onload() {
-    const rawData = await this.loadData();
+    const { data: rawData, migratedFromLegacy } = await this.loadAgentDataFile();
     this.agentData = this.normalizeAgentData(rawData);
-    if (rawData?.appServerDebugEvents) {
-      void this.saveData(this.agentData);
+    if (rawData?.appServerDebugEvents || migratedFromLegacy) {
+      void this.saveAgentDataFile();
     }
     this.availableSkills = this.loadAvailableSkills();
     this.addSettingTab(new CodexAgentSettingTab(this.app, this));
+    this.registerEditorExtension(inlineDiffReviewExtension);
 
     this.registerView(
       VIEW_TYPE_CODEX_AGENT,
@@ -1366,12 +1703,25 @@ export default class CodexForObsidianPlugin extends Plugin {
       sessions: this.agentData.sessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
       archivedSessions: this.agentData.archivedSessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
       activeSessionId: this.agentData.activeSessionId,
-      settings: { ...this.agentData.settings }
+      settings: { ...this.agentData.settings },
+      diffReviewState: this.cloneDiffReviewState(this.agentData.diffReviewState)
     };
   }
 
   getSettings(): AgentPluginSettings {
     return { ...this.agentData.settings };
+  }
+
+  getDiffReviewState(): DiffReviewPersistedState {
+    return this.cloneDiffReviewState(this.agentData.diffReviewState);
+  }
+
+  saveDiffReviewState(diffReviewState: DiffReviewPersistedState) {
+    this.agentData = {
+      ...this.agentData,
+      diffReviewState: this.normalizeDiffReviewState(diffReviewState)
+    };
+    void this.saveAgentDataFile();
   }
 
   getSkills(): SkillDefinition[] {
@@ -1384,12 +1734,30 @@ export default class CodexForObsidianPlugin extends Plugin {
       ...this.agentData,
       settings: this.normalizeSettings(settings)
     };
-    await this.saveData(this.agentData);
+    await this.saveAgentDataFile();
     this.refreshOpenAgentViews();
   }
 
   async openAgentView() {
     await this.activateView();
+  }
+
+  async clearUserData() {
+    const dataDirPaths = [
+      this.getAgentDataDirPath(),
+      ...LEGACY_AGENT_DATA_DIR_NAMES.map((dirName) => this.getAgentDataDirPath(dirName))
+    ].filter(Boolean);
+    try {
+      for (const dataDirPath of [...new Set(dataDirPaths)]) {
+        await fs.promises.rm(dataDirPath, { recursive: true, force: true });
+      }
+      this.agentData = this.createDefaultAgentData();
+      this.app.workspace.detachLeavesOfType(VIEW_TYPE_CODEX_AGENT);
+      new Notice("Codex AI Agent user data cleared.");
+    } catch (error) {
+      console.error("Failed to clear Codex AI Agent user data", error);
+      new Notice("Failed to clear Codex AI Agent user data.");
+    }
   }
 
   private refreshOpenAgentViews() {
@@ -1405,9 +1773,96 @@ export default class CodexForObsidianPlugin extends Plugin {
       sessions: sessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
       archivedSessions: archivedSessions.map((session) => ({ ...session, timeline: [...session.timeline] })),
       activeSessionId,
-      settings: this.agentData.settings
+      settings: this.agentData.settings,
+      diffReviewState: this.agentData.diffReviewState
     };
-    void this.saveData(this.agentData);
+    void this.saveAgentDataFile();
+  }
+
+  private createDefaultAgentData(): AgentPluginData {
+    return {
+      sessions: [],
+      archivedSessions: [],
+      activeSessionId: "",
+      settings: { ...DEFAULT_SETTINGS },
+      diffReviewState: {
+        acceptedFiles: [],
+        acceptedHunks: [],
+        acceptedLines: [],
+        rejectedFiles: []
+      }
+    };
+  }
+
+  private async loadAgentDataFile(): Promise<{ data: any; migratedFromLegacy: boolean }> {
+    const agentDataPath = this.getAgentDataFilePath();
+    if (agentDataPath) {
+      const stored = await this.readJsonFile(agentDataPath);
+      if (stored !== null) {
+        return { data: stored, migratedFromLegacy: false };
+      }
+    }
+
+    for (const legacyDirName of LEGACY_AGENT_DATA_DIR_NAMES) {
+      const legacyRootPath = this.getAgentDataFilePath(legacyDirName);
+      if (!legacyRootPath || legacyRootPath === agentDataPath) {
+        continue;
+      }
+      const legacyRootData = await this.readJsonFile(legacyRootPath);
+      if (legacyRootData !== null) {
+        return { data: legacyRootData, migratedFromLegacy: true };
+      }
+    }
+
+    const legacyData = await this.loadData();
+    return { data: legacyData, migratedFromLegacy: Boolean(legacyData) };
+  }
+
+  private async saveAgentDataFile() {
+    const agentDataPath = this.getAgentDataFilePath();
+    if (!agentDataPath) {
+      await this.saveData(this.agentData);
+      return;
+    }
+    try {
+      await fs.promises.mkdir(path.dirname(agentDataPath), { recursive: true });
+      await fs.promises.writeFile(agentDataPath, JSON.stringify(this.agentData, null, 2), "utf8");
+    } catch (error) {
+      console.error("Failed to save Codex AI Agent data file", error);
+      await this.saveData(this.agentData);
+    }
+  }
+
+  private async readJsonFile(filePath: string): Promise<any | null> {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return null;
+      }
+      const content = await fs.promises.readFile(filePath, "utf8");
+      return JSON.parse(content);
+    } catch (error) {
+      console.error("Failed to read Codex AI Agent data file", error);
+      return null;
+    }
+  }
+
+  private getAgentDataFilePath(dirName = AGENT_DATA_DIR_NAME) {
+    const dataDirPath = this.getAgentDataDirPath(dirName);
+    return dataDirPath ? path.join(dataDirPath, AGENT_DATA_FILE_NAME) : "";
+  }
+
+  private getAgentDataDirPath(dirName = AGENT_DATA_DIR_NAME) {
+    const adapter = this.app.vault.adapter as any;
+    let vaultBasePath = "";
+    try {
+      vaultBasePath = typeof adapter?.getBasePath === "function" ? adapter.getBasePath() : "";
+    } catch {
+      vaultBasePath = "";
+    }
+    if (!vaultBasePath) {
+      return "";
+    }
+    return path.join(vaultBasePath, ".obsidian", dirName);
   }
 
   private normalizeAgentData(data: any): AgentPluginData {
@@ -1418,7 +1873,38 @@ export default class CodexForObsidianPlugin extends Plugin {
       ? data.archivedSessions.map((session: any) => this.normalizeSession(session)).filter(Boolean) as AgentSession[]
       : [];
     const activeSessionId = typeof data?.activeSessionId === "string" ? data.activeSessionId : "";
-    return { sessions, archivedSessions, activeSessionId, settings: this.normalizeSettings(data?.settings) };
+    return {
+      sessions,
+      archivedSessions,
+      activeSessionId,
+      settings: this.normalizeSettings(data?.settings),
+      diffReviewState: this.normalizeDiffReviewState(data?.diffReviewState)
+    };
+  }
+
+  private cloneDiffReviewState(state: DiffReviewPersistedState): DiffReviewPersistedState {
+    return {
+      acceptedFiles: [...state.acceptedFiles],
+      acceptedHunks: [...state.acceptedHunks],
+      acceptedLines: [...state.acceptedLines],
+      rejectedFiles: [...state.rejectedFiles]
+    };
+  }
+
+  private normalizeDiffReviewState(state: any): DiffReviewPersistedState {
+    return {
+      acceptedFiles: this.normalizeStringList(state?.acceptedFiles),
+      acceptedHunks: this.normalizeStringList(state?.acceptedHunks),
+      acceptedLines: this.normalizeStringList(state?.acceptedLines),
+      rejectedFiles: this.normalizeStringList(state?.rejectedFiles)
+    };
+  }
+
+  private normalizeStringList(value: any): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    return [...new Set(value.filter((entry) => typeof entry === "string" && entry.trim()))];
   }
 
   private loadAvailableSkills(): SkillDefinition[] {
@@ -1589,6 +2075,8 @@ export default class CodexForObsidianPlugin extends Plugin {
       stickyUserPrompts: typeof settings?.stickyUserPrompts === "boolean" ? settings.stickyUserPrompts : DEFAULT_SETTINGS.stickyUserPrompts,
       compactCommandGroups: typeof settings?.compactCommandGroups === "boolean" ? settings.compactCommandGroups : DEFAULT_SETTINGS.compactCommandGroups,
       diffLineNumbers: typeof settings?.diffLineNumbers === "boolean" ? settings.diffLineNumbers : DEFAULT_SETTINGS.diffLineNumbers,
+      enableDiffReview: typeof settings?.enableDiffReview === "boolean" ? settings.enableDiffReview : DEFAULT_SETTINGS.enableDiffReview,
+      enableGitManagement: typeof settings?.enableGitManagement === "boolean" ? settings.enableGitManagement : DEFAULT_SETTINGS.enableGitManagement,
       pastedImageBehavior: "chip",
       chatViewLocation: ["right-pane", "left-pane", "new-leaf"].includes(settings?.chatViewLocation) ? settings.chatViewLocation : DEFAULT_SETTINGS.chatViewLocation,
       chatFontSize: this.normalizeRangedInteger(settings?.chatFontSize, DEFAULT_SETTINGS.chatFontSize, 13, 20)
@@ -1805,6 +2293,7 @@ class CodexAgentSettingTab extends PluginSettingTab {
     this.renderSetup(containerEl, settings);
     this.renderDefaults(containerEl, settings);
     this.renderContext(containerEl, settings);
+    this.renderDataManagement(containerEl);
     this.renderAdvanced(containerEl, settings);
   }
 
@@ -2006,6 +2495,36 @@ class CodexAgentSettingTab extends PluginSettingTab {
       .setName("Diff line numbers")
       .setDesc("Show old and new line numbers in diffs.")
       .addToggle((toggle) => toggle.setValue(settings.diffLineNumbers).onChange(async (value) => this.update({ diffLineNumbers: value })));
+
+    new Setting(containerEl)
+      .setName("Change review")
+      .setDesc("Show Codex file-change review, including diff preview plus accept/reject controls. Turn this off if you do not want review workflows.")
+      .addToggle((toggle) => toggle.setValue(settings.enableDiffReview).onChange(async (value) => this.update({ enableDiffReview: value })));
+
+    new Setting(containerEl)
+      .setName("Git management")
+      .setDesc("Show Git-specific controls for staging, committing, and history. This is independent from Codex change review.")
+      .addToggle((toggle) => toggle.setValue(settings.enableGitManagement).onChange(async (value) => this.update({ enableGitManagement: value })));
+  }
+
+  private renderDataManagement(containerEl: HTMLElement) {
+    containerEl.createEl("h3", { text: "Data" });
+    new Setting(containerEl)
+      .setName("User data")
+      .setDesc("Stored outside the plugin install folder at .obsidian/.codexaiagent/data.json so reinstalling the plugin does not remove conversations or review state.")
+      .addButton((button) => button
+        .setButtonText("Clear user data")
+        .setWarning()
+        .onClick(() => {
+          new CodexConfirmModal(
+            this.app,
+            "清理 Codex AI Agent 用户数据？",
+            "这会删除 .obsidian/.codexaiagent 下的会话、设置和 diff 审查状态。当前 Agent 面板会关闭，插件设置会恢复默认值。",
+            "确认清理",
+            true,
+            () => void this.owner.clearUserData()
+          ).open();
+        }));
   }
 
   private renderAdvanced(containerEl: HTMLElement, settings: AgentPluginSettings) {
@@ -2176,6 +2695,39 @@ class CodexApprovalNoticeModal extends Modal {
   }
 }
 
+class CodexConfirmModal extends Modal {
+  constructor(
+    app: any,
+    private title: string,
+    private message: string,
+    private confirmLabel: string,
+    private danger: boolean,
+    private onConfirm: () => void
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("codex-agent-approval-modal");
+    contentEl.createEl("h3", { text: this.title });
+    contentEl.createEl("p", { text: this.message });
+    const actions = contentEl.createDiv("codex-agent-approval-modal-actions");
+    const cancel = actions.createEl("button", { text: "取消" });
+    const confirm = actions.createEl("button", { cls: this.danger ? "mod-warning" : "mod-cta", text: this.confirmLabel });
+    cancel.addEventListener("click", () => this.close());
+    confirm.addEventListener("click", () => {
+      this.close();
+      this.onConfirm();
+    });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 class CodexAgentView extends ItemView {
   private mode: AgentMode = "agent";
   private adapterMode: AdapterMode = "app-server";
@@ -2195,6 +2747,7 @@ class CodexAgentView extends ItemView {
   private tabContainer: HTMLElement | null = null;
   private historyPanel: HTMLElement | null = null;
   private historyOutsideClickHandler: ((event: MouseEvent) => void) | null = null;
+  private renamingHistorySessionId: string | null = null;
   private timelineContainer: HTMLElement | null = null;
   private stickyUserPromptEl: HTMLElement | null = null;
   private stickyUserPromptContentEl: HTMLElement | null = null;
@@ -2202,6 +2755,21 @@ class CodexAgentView extends ItemView {
   private workbenchContainer: HTMLElement | null = null;
   private composerContainer: HTMLElement | null = null;
   private tokenUsageEl: HTMLElement | null = null;
+  private gitChangesEl: HTMLElement | null = null;
+  private gitChangesTimer: number | null = null;
+  private gitDiffBackdropEl: HTMLElement | null = null;
+  private gitDiffPanelEl: HTMLElement | null = null;
+  private gitDiffExpandedFiles = new Set<string>();
+  private gitDiffAcceptedFiles = new Set<string>();
+  private gitDiffAcceptedHunks = new Set<string>();
+  private gitDiffAcceptedLines = new Set<string>();
+  private gitDiffRejectedFiles = new Set<string>();
+  private gitDiffReviewFiles: DiffFileView[] = [];
+  private activeGitReviewSection: GitReviewSection = "review";
+  private gitDiffReviewFilter: DiffReviewFilter = "active";
+  private gitDiffEditorReviewBarEl: HTMLElement | null = null;
+  private inlineDiffEditorView: EditorView | null = null;
+  private inlineDiffReviewFile: DiffFileView | null = null;
   private liveDiffEl: HTMLElement | null = null;
   private scrollBottomButton: HTMLButtonElement | null = null;
   private modeButton: HTMLButtonElement | null = null;
@@ -2242,6 +2810,7 @@ class CodexAgentView extends ItemView {
     this.activeSessionId = this.sessions.some((session) => session.id === saved.activeSessionId)
       ? saved.activeSessionId
       : this.sessions[0].id;
+    this.restoreGitDiffReviewState(saved.diffReviewState);
   }
 
   getViewType(): string {
@@ -2256,13 +2825,49 @@ class CodexAgentView extends ItemView {
     return AGENT_ICON_ID;
   }
 
+  private restoreGitDiffReviewState(state: DiffReviewPersistedState) {
+    this.gitDiffAcceptedFiles = new Set(state.acceptedFiles);
+    this.gitDiffAcceptedHunks = new Set(state.acceptedHunks);
+    this.gitDiffAcceptedLines = new Set(state.acceptedLines);
+    this.gitDiffRejectedFiles = new Set(state.rejectedFiles);
+  }
+
+  private persistGitDiffReviewState() {
+    this.owner.saveDiffReviewState({
+      acceptedFiles: [...this.gitDiffAcceptedFiles],
+      acceptedHunks: [...this.gitDiffAcceptedHunks],
+      acceptedLines: [...this.gitDiffAcceptedLines],
+      rejectedFiles: [...this.gitDiffRejectedFiles]
+    });
+  }
+
   applyDisplaySettings() {
+    const settings = this.owner.getSettings();
     const container = this.containerEl.children[1] as HTMLElement | undefined;
-    container?.style.setProperty("--codex-chat-font-size", `${this.owner.getSettings().chatFontSize}px`);
+    container?.style.setProperty("--codex-chat-font-size", `${settings.chatFontSize}px`);
+    if (!settings.enableDiffReview) {
+      this.liveDiffEl?.empty();
+      this.liveDiffEl?.removeClass("is-visible");
+      this.closeGitDiffEditorReviewBar();
+      if (!settings.enableGitManagement || this.activeGitReviewSection === "review") {
+        this.closeGitDiffPanel();
+      }
+    }
+    if (!settings.enableGitManagement && !settings.enableDiffReview) {
+      this.gitChangesEl?.empty();
+      this.gitChangesEl?.removeClass("is-visible");
+      this.closeGitDiffPanel();
+    } else {
+      void this.renderGitChanges();
+    }
+    this.renderLiveDiff();
   }
 
   async onClose() {
     this.stopElapsedTimer();
+    this.stopGitChangesTimer();
+    this.closeGitDiffPanel();
+    this.closeGitDiffEditorReviewBar();
     this.closeHistoryPanel();
     this.closePromptPicker();
     this.closeAuxModeMenu();
@@ -2389,10 +2994,12 @@ class CodexAgentView extends ItemView {
       list.empty();
       const sessions = this.getHistorySessions()
         .filter((session) => session.title.toLowerCase().includes(query));
-      this.renderHistoryGroup(list, "Today", this.filterHistoryByAge(sessions, 0, 1), renderList);
-      this.renderHistoryGroup(list, "Yesterday", this.filterHistoryByAge(sessions, 1, 2), renderList);
-      this.renderHistoryGroup(list, "Last 7 Days", this.filterHistoryByAge(sessions, 2, 7), renderList);
-      this.renderHistoryGroup(list, "Last 30 Days", this.filterHistoryByAge(sessions, 7, 30), renderList);
+      const groups = this.groupHistorySessionsByDate(sessions);
+      if (groups.length === 0) {
+        list.createDiv({ cls: "codex-agent-history-empty", text: query ? "No matching sessions" : "No sessions" });
+        return;
+      }
+      groups.forEach((group) => this.renderHistoryGroup(list, group.label, group.sessions, renderList));
     };
     search.addEventListener("input", renderList);
     renderList();
@@ -2401,25 +3008,66 @@ class CodexAgentView extends ItemView {
 
   private renderHistoryGroup(parent: HTMLElement, label: string, sessions: AgentSession[], onDelete: () => void) {
     parent.createDiv({ cls: "codex-agent-history-group", text: label });
-    if (sessions.length === 0) {
-      parent.createDiv({ cls: "codex-agent-history-empty", text: "No agents" });
-      return;
-    }
 
     sessions.forEach((session) => {
-      const item = parent.createEl("button", { cls: "codex-agent-history-item" });
+      const item = parent.createDiv("codex-agent-history-item");
       item.createSpan({ cls: "codex-agent-history-icon", text: session.timeline.length > 0 ? "✓" : "✎" });
-      item.createSpan({ cls: "codex-agent-history-title", text: session.title });
-      const deleteButton = item.createEl("span", {
+      const main = item.createDiv("codex-agent-history-main");
+      if (this.renamingHistorySessionId === session.id) {
+        const input = main.createEl("input", {
+          cls: "codex-agent-history-rename-input",
+          attr: { type: "text", value: session.title, "aria-label": "Session name" }
+        });
+        const commit = () => {
+          const nextTitle = input.value.trim();
+          this.renamingHistorySessionId = null;
+          if (nextTitle && nextTitle !== session.title) {
+            this.renameHistorySession(session.id, nextTitle);
+          }
+          onDelete();
+        };
+        input.addEventListener("click", (event) => event.stopPropagation());
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            this.renamingHistorySessionId = null;
+            onDelete();
+          }
+        });
+        input.addEventListener("blur", commit);
+        window.setTimeout(() => {
+          input.focus();
+          input.select();
+        }, 0);
+      } else {
+        main.createSpan({ cls: "codex-agent-history-title", text: session.title });
+      }
+      main.createSpan({ cls: "codex-agent-history-time", text: this.formatHistorySessionTime(this.getSessionHistoryTime(session)) });
+      const actions = item.createDiv("codex-agent-history-actions");
+      const renameButton = actions.createEl("button", {
+        cls: "codex-agent-history-action",
+        attr: { type: "button", "aria-label": `Rename ${session.title}`, title: "Rename" }
+      });
+      setIcon(renameButton, "pencil");
+      const deleteButton = actions.createEl("button", {
         cls: "codex-agent-history-delete",
         text: "×",
-        attr: { "aria-label": `Delete ${session.title}` }
+        attr: { type: "button", "aria-label": `Delete ${session.title}`, title: "Delete" }
       });
       item.addEventListener("click", () => {
         this.restoreSession(session.id);
         this.renderSessionTabs();
         this.renderTimelineItems();
         this.closeHistoryPanel();
+      });
+      renameButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.renamingHistorySessionId = session.id;
+        onDelete();
       });
       deleteButton.addEventListener("click", (event) => {
         event.preventDefault();
@@ -2451,13 +3099,60 @@ class CodexAgentView extends ItemView {
       .sort((a, b) => this.getSessionHistoryTime(b) - this.getSessionHistoryTime(a));
   }
 
-  private filterHistoryByAge(sessions: AgentSession[], minDays: number, maxDays: number) {
-    const now = Date.now();
-    const day = 24 * 60 * 60 * 1000;
-    return sessions.filter((session) => {
-      const ageDays = Math.floor((now - this.getSessionHistoryTime(session)) / day);
-      return ageDays >= minDays && ageDays < maxDays;
+  private groupHistorySessionsByDate(sessions: AgentSession[]) {
+    const groups = new Map<string, { label: string; time: number; sessions: AgentSession[] }>();
+    sessions.forEach((session) => {
+      const time = this.getSessionHistoryTime(session);
+      const key = this.getHistoryDateKey(time);
+      const existing = groups.get(key);
+      if (existing) {
+        existing.sessions.push(session);
+        return;
+      }
+      groups.set(key, {
+        label: this.formatHistoryGroupLabel(time),
+        time: this.startOfLocalDay(time),
+        sessions: [session]
+      });
     });
+    return [...groups.values()].sort((a, b) => b.time - a.time);
+  }
+
+  private getHistoryDateKey(time: number) {
+    const date = new Date(time);
+    return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+  }
+
+  private formatHistoryGroupLabel(time: number) {
+    const start = this.startOfLocalDay(time);
+    const today = this.startOfLocalDay(Date.now());
+    const day = 24 * 60 * 60 * 1000;
+    const dateText = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: new Date(time).getFullYear() === new Date().getFullYear() ? undefined : "numeric"
+    }).format(new Date(time));
+    if (start === today) {
+      return `Today · ${dateText}`;
+    }
+    if (start === today - day) {
+      return `Yesterday · ${dateText}`;
+    }
+    return dateText;
+  }
+
+  private formatHistorySessionTime(time: number) {
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(time));
+  }
+
+  private startOfLocalDay(time: number) {
+    const date = new Date(time);
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   }
 
   private getSessionHistoryTime(session: AgentSession) {
@@ -2475,6 +3170,19 @@ class CodexAgentView extends ItemView {
     this.activeSessionId = sessionId;
     this.persistSessions();
     this.renderTokenUsage();
+  }
+
+  private renameHistorySession(sessionId: string, nextTitle: string) {
+    const session = this.getSessionById(sessionId);
+    if (!session) {
+      return;
+    }
+    if (!nextTitle || nextTitle === session.title) {
+      return;
+    }
+    session.title = nextTitle;
+    this.persistSessions();
+    this.renderSessionTabs();
   }
 
   private renderTimeline(container: Element) {
@@ -2904,7 +3612,9 @@ class CodexAgentView extends ItemView {
 
   private renderDiffSummary(parent: HTMLElement, item: TimelineItem) {
     const byFile = this.parseDiffStats(item.diffText ?? "").files;
-    const files = byFile.length > 0 ? byFile : (item.diffFiles ?? []).map((path) => ({ path, added: 0, removed: 0, lines: [] }));
+    const files = byFile.length > 0
+      ? byFile
+      : (item.diffFiles ?? []).map((path) => ({ path, oldPath: path, headerLines: [], added: 0, removed: 0, lines: [], hunks: [] }));
     const expandedFiles = new Set(item.diffExpandedFiles ?? (item.expanded ? files.map((file) => file.path) : []));
     const shouldAnimateCounts = this.shouldAnimateDiffCounts(item);
     const header = parent.createDiv("codex-agent-diff-card-head");
@@ -2925,7 +3635,7 @@ class CodexAgentView extends ItemView {
         attr: { type: "button" }
       });
       row.addEventListener("click", () => this.toggleDiffFileTimelineItem(item.diffId, file.path));
-      row.createSpan({ cls: "codex-agent-diff-file-name", text: file.path });
+      this.renderDiffFileIdentity(row, file.path);
       const meta = row.createSpan("codex-agent-diff-file-meta");
       const counts = meta.createSpan("codex-agent-diff-file-counts");
       this.renderDiffCounts(counts, file.added, file.removed, shouldAnimateCounts);
@@ -2952,6 +3662,75 @@ class CodexAgentView extends ItemView {
       cls: `codex-agent-diff-removed ${animated ? "is-bumping" : ""}`,
       text: `-${removed}`
     });
+  }
+
+  private renderDiffFileIdentity(parent: HTMLElement, filePath: string) {
+    const displayPath = this.cleanDiffPath(filePath);
+    const directory = this.getDisplayDirname(displayPath);
+    const identity = parent.createSpan("codex-agent-diff-file-identity");
+    const icon = identity.createSpan("codex-agent-diff-file-icon");
+    setIcon(icon, this.getPickerFileIcon(displayPath));
+    const text = identity.createSpan("codex-agent-diff-file-text");
+    text.createSpan({ cls: "codex-agent-diff-file-name", text: this.getDisplayBasename(displayPath) });
+    if (directory) {
+      text.createSpan({ cls: "codex-agent-diff-file-path", text: directory });
+    }
+    identity.setAttr("title", displayPath);
+  }
+
+  private getDisplayBasename(filePath: string) {
+    return filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
+  }
+
+  private getDisplayDirname(filePath: string) {
+    const normalized = filePath.replace(/\\/g, "/").replace(/\/+$/, "");
+    const index = normalized.lastIndexOf("/");
+    return index > 0 ? normalized.slice(0, index) : "";
+  }
+
+  private cleanDiffPath(filePath: string) {
+    return this.stripDiffPathPrefix(this.decodeGitPath(filePath)).replace(/\\/g, "/");
+  }
+
+  private stripDiffPathPrefix(filePath: string) {
+    return filePath
+      .replace(/^"+|"+$/g, "")
+      .replace(/^a\//, "")
+      .replace(/^b\//, "");
+  }
+
+  private decodeGitPath(filePath: string) {
+    const trimmed = filePath.trim();
+    const quoted = trimmed.startsWith("\"") && trimmed.endsWith("\"")
+      ? trimmed.slice(1, -1)
+      : trimmed;
+    if (!quoted.includes("\\")) {
+      return quoted;
+    }
+    try {
+      const bytes: number[] = [];
+      const encoder = new TextEncoder();
+      for (let index = 0; index < quoted.length; index += 1) {
+        const char = quoted[index];
+        const octal = quoted.slice(index + 1, index + 4);
+        if (char === "\\" && /^[0-7]{3}$/.test(octal)) {
+          bytes.push(parseInt(octal, 8));
+          index += 3;
+          continue;
+        }
+        if (char === "\\" && index + 1 < quoted.length) {
+          const next = quoted[index + 1];
+          const mapped = next === "n" ? "\n" : next === "t" ? "\t" : next;
+          bytes.push(...encoder.encode(mapped));
+          index += 1;
+          continue;
+        }
+        bytes.push(...encoder.encode(char));
+      }
+      return new TextDecoder("utf-8").decode(new Uint8Array(bytes));
+    } catch {
+      return quoted;
+    }
   }
 
   private renderDiffFileLines(parent: HTMLElement, file: DiffFileView) {
@@ -3079,6 +3858,17 @@ class CodexAgentView extends ItemView {
     this.composerContainer = composer;
     this.renderScrollBottomButton(composer);
     this.liveDiffEl = composer.createDiv("codex-agent-live-diff");
+    this.liveDiffEl.setAttr("role", "button");
+    this.liveDiffEl.setAttr("tabindex", "0");
+    this.liveDiffEl.setAttr("title", "Review Codex file changes");
+    this.liveDiffEl.addEventListener("click", () => this.openLiveDiffReviewPanel());
+    this.liveDiffEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      this.openLiveDiffReviewPanel();
+    });
     this.renderLiveDiff();
     const inputBox = composer.createDiv("codex-agent-input-box");
     this.promptInput = inputBox.createDiv({
@@ -3130,6 +3920,22 @@ class CodexAgentView extends ItemView {
     this.runButton.addEventListener("click", () => this.runCodex());
     this.tokenUsageEl = composer.createDiv("codex-agent-token-usage");
     this.renderTokenUsage();
+    this.gitChangesEl = composer.createDiv("codex-agent-git-changes");
+    this.gitChangesEl.setAttr("role", "button");
+    this.gitChangesEl.setAttr("tabindex", "0");
+    this.gitChangesEl.setAttr("title", "Review uncommitted changes");
+    this.gitChangesEl.addEventListener("click", () => {
+      void this.openGitDiffPanel();
+    });
+    this.gitChangesEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      event.preventDefault();
+      void this.openGitDiffPanel();
+    });
+    this.renderGitChanges();
+    this.startGitChangesTimer();
   }
 
   private setRunButtonRunning(isRunning: boolean) {
@@ -3305,11 +4111,1293 @@ class CodexAgentView extends ItemView {
     return String(value);
   }
 
+  private async renderGitChanges() {
+    if (!this.gitChangesEl) {
+      return;
+    }
+    const targetEl = this.gitChangesEl;
+    const settings = this.owner.getSettings();
+    const reviewOnly = settings.enableDiffReview && !settings.enableGitManagement;
+    if (!settings.enableGitManagement && !settings.enableDiffReview) {
+      targetEl.empty();
+      targetEl.removeClass("is-visible");
+      return;
+    }
+    const vaultPath = this.getVaultBasePath();
+    if (!vaultPath) {
+      targetEl.empty();
+      targetEl.removeClass("is-visible");
+      return;
+    }
+    const stats = await this.getGitChangeStats(vaultPath);
+    if (!this.gitChangesEl || this.gitChangesEl !== targetEl) {
+      return;
+    }
+    if (!stats) {
+      targetEl.empty();
+      targetEl.removeClass("is-visible");
+      return;
+    }
+    targetEl.empty();
+    const isClean = stats.files === 0 && stats.untracked === 0;
+    targetEl.addClass("is-visible");
+    targetEl.setAttr(
+      "title",
+      reviewOnly
+        ? "打开改动审查。当前未启用 Git 管理，因此只显示接受/拒绝。"
+        : "打开 Git 工作区面板。Git 暂存/提交/历史与审查接受/拒绝是独立功能。"
+    );
+    setIcon(targetEl.createSpan("codex-agent-git-changes-icon"), reviewOnly ? "file-check-2" : isClean ? "git-branch" : "git-compare");
+    const fileLabel = stats.files === 1 ? "1 个改动文件" : `${stats.files} 个改动文件`;
+    const untrackedLabel = stats.untracked > 0 ? ` · ${stats.untracked} 个未跟踪` : "";
+    targetEl.createSpan({
+      cls: "codex-agent-git-changes-label",
+      text: reviewOnly
+        ? stats.files > 0 ? `审查改动 · ${fileLabel}` : "审查改动 · 当前无待审查"
+        : isClean ? "Git 工作区干净 · 查看版本记录" : `Git 工作区 · ${fileLabel}${untrackedLabel}`
+    });
+    if (!isClean && !reviewOnly) {
+      this.renderDiffCounts(targetEl, stats.added, stats.removed, false);
+    } else if (reviewOnly && stats.files > 0) {
+      this.renderDiffCounts(targetEl, stats.added, stats.removed, false);
+    }
+  }
+
+  private async openGitDiffPanel() {
+    const settings = this.owner.getSettings();
+    if (!settings.enableGitManagement && !settings.enableDiffReview) {
+      new Notice("Change review and Git management are disabled in Codex Agent settings.");
+      return;
+    }
+    const vaultPath = this.getVaultBasePath();
+    if (!vaultPath) {
+      new Notice("Cannot locate vault path.");
+      return;
+    }
+    const diffResult = await this.runGit(["-c", "core.quotepath=false", "diff", "--", "."], vaultPath);
+    if (!diffResult.ok) {
+      new Notice("Unable to read git diff.");
+      return;
+    }
+    const stats = this.parseDiffStats(diffResult.stdout);
+    this.activeGitReviewSection = settings.enableDiffReview && stats.files.length > 0 ? "review" : stats.files.length > 0 ? "stage" : "history";
+    this.gitDiffReviewFilter = "active";
+    this.renderGitDiffPanel(stats.files, stats.added, stats.removed, settings.enableGitManagement);
+  }
+
+  private openLiveDiffReviewPanel() {
+    if (!this.owner.getSettings().enableDiffReview) {
+      new Notice("Change review is disabled in Codex Agent settings.");
+      return;
+    }
+    const stats = this.currentDiffStats;
+    if (!stats || stats.files.length === 0) {
+      new Notice("No Codex file changes to review.");
+      return;
+    }
+    this.activeGitReviewSection = "review";
+    this.gitDiffReviewFilter = "active";
+    this.renderGitDiffPanel(stats.files, stats.added, stats.removed, false);
+  }
+
+  private finalizePreviousDiffReviewForNextTurn() {
+    const files = this.currentDiffStats?.files?.length ? this.currentDiffStats.files as DiffFileView[] : this.gitDiffReviewFiles;
+    files.forEach((file) => {
+      if (this.gitDiffRejectedFiles.has(file.path)) {
+        return;
+      }
+      this.gitDiffAcceptedFiles.add(file.path);
+      file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id)));
+      file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line))));
+    });
+    this.persistGitDiffReviewState();
+    this.currentDiffStats = null;
+    this.gitDiffReviewFiles = [];
+    this.gitDiffExpandedFiles = new Set();
+    this.gitDiffReviewFilter = "active";
+    this.closeGitDiffPanel();
+    this.renderLiveDiff();
+  }
+
+  private renderGitDiffPanel(files: DiffFileView[], added: number, removed: number, enableGitSections = this.owner.getSettings().enableGitManagement) {
+    this.closeGitDiffPanel();
+    this.pruneGitDiffReviewState(files);
+    this.gitDiffReviewFiles = files;
+    const enableReview = this.owner.getSettings().enableDiffReview;
+    if (!enableGitSections) {
+      this.activeGitReviewSection = "review";
+    } else if (!enableReview && this.activeGitReviewSection === "review") {
+      this.activeGitReviewSection = files.length > 0 ? "stage" : "history";
+    }
+    this.gitDiffExpandedFiles = new Set(files.length === 1 ? [files[0].path] : []);
+    const backdrop = this.containerEl.createDiv("codex-agent-git-diff-backdrop");
+    this.gitDiffBackdropEl = backdrop;
+    backdrop.addEventListener("click", () => this.closeGitDiffPanel());
+    const panel = this.containerEl.createDiv("codex-agent-git-diff-panel");
+    this.gitDiffPanelEl = panel;
+
+    const header = panel.createDiv("codex-agent-git-diff-header");
+    const title = header.createDiv("codex-agent-git-diff-title");
+    title.createSpan({
+      text: enableGitSections
+        ? enableReview ? "改动审查 / Git 工作区" : "Git 工作区"
+        : "改动审查"
+    });
+    this.renderDiffCounts(title, added, removed, false);
+    header.createDiv({
+      cls: "codex-agent-git-diff-subtitle",
+      text: enableGitSections
+        ? enableReview
+          ? "审查用于接受或拒绝文件改动；Git 工作区用于暂存、提交和查看历史，二者不会自动同步。"
+          : "当前关闭改动审查；这里只查看 Git 工作区，并处理暂存、提交和版本记录。"
+        : "当前未启用 Git 管理；这里只处理接受/拒绝，不会暂存、提交或写入 Git 历史。"
+    });
+    const close = header.createEl("button", {
+      cls: "codex-agent-git-diff-close",
+      text: "×",
+      attr: { type: "button", "aria-label": "Close diff review" }
+    });
+    close.addEventListener("click", () => this.closeGitDiffPanel());
+
+    const stepsHost = panel.createDiv("codex-agent-git-review-steps-host");
+    const sectionHost = panel.createDiv("codex-agent-git-section-host");
+    const list = panel.createDiv("codex-agent-git-diff-list");
+    const footerHost = panel.createDiv("codex-agent-git-review-footer-host");
+    let refreshReview = () => {};
+    const renderReviewSteps = () => {
+      stepsHost.empty();
+      if (!enableGitSections) {
+        const banner = stepsHost.createDiv("codex-agent-review-only-banner");
+        setIcon(banner.createSpan("codex-agent-review-only-icon"), "file-check-2");
+        const text = banner.createSpan("codex-agent-review-only-text");
+        text.createSpan({ cls: "codex-agent-review-only-title", text: "只审查改动" });
+        text.createSpan({ cls: "codex-agent-review-only-detail", text: "当前未启用 Git 管理；这里只处理接受/拒绝，不显示暂存、提交和版本记录。" });
+        return;
+      }
+      this.renderGitReviewSteps(stepsHost, files, this.activeGitReviewSection, enableReview, (section) => {
+        this.activeGitReviewSection = section;
+        renderPanelBody();
+      });
+    };
+    const renderFiles = () => {
+      list.empty();
+    if (files.length === 0) {
+      const empty = list.createDiv("codex-agent-git-diff-empty-state");
+      setIcon(empty.createSpan("codex-agent-git-diff-empty-icon"), enableGitSections ? "git-branch" : "file-check-2");
+      const text = empty.createDiv("codex-agent-git-diff-empty-text");
+      text.createDiv({ cls: "codex-agent-git-diff-empty-title", text: enableGitSections ? "工作区干净" : "当前无待审查改动" });
+      text.createDiv({
+        cls: "codex-agent-git-diff-empty-detail",
+        text: enableGitSections
+          ? "没有未提交的文件改动。入口会继续保留，用于查看版本记录或发起下一次提交检查。"
+          : "审查功能已开启，但当前没有可接受或拒绝的文件改动。"
+      });
+      return;
+    }
+      const visibleFiles = this.getFilteredDiffFiles(files);
+      if (visibleFiles.length === 0) {
+        const empty = list.createDiv("codex-agent-git-diff-empty-state");
+        setIcon(empty.createSpan("codex-agent-git-diff-empty-icon"), "filter");
+        const text = empty.createDiv("codex-agent-git-diff-empty-text");
+        text.createDiv({ cls: "codex-agent-git-diff-empty-title", text: "当前过滤下没有文件" });
+        text.createDiv({ cls: "codex-agent-git-diff-empty-detail", text: "已处理文件会默认隐藏。切换到“全部”或“已接受”可以回看。" });
+        return;
+      }
+      visibleFiles.forEach((file) => {
+        const expanded = this.gitDiffExpandedFiles.has(file.path);
+        const accepted = this.gitDiffAcceptedFiles.has(file.path);
+        const status = this.getDiffFileReviewStatus(file);
+        const fileBlock = list.createDiv(`codex-agent-diff-file-block is-${status.key}`);
+        const row = fileBlock.createDiv(`codex-agent-diff-file-row ${expanded ? "is-expanded" : ""}`);
+        row.setAttr("role", "button");
+        row.setAttr("tabindex", "0");
+        row.addEventListener("click", () => {
+          if (this.gitDiffExpandedFiles.has(file.path)) {
+            this.gitDiffExpandedFiles.delete(file.path);
+          } else {
+            this.gitDiffExpandedFiles.add(file.path);
+          }
+          renderFiles();
+        });
+        row.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+          event.preventDefault();
+          row.click();
+        });
+        this.renderDiffFileIdentity(row, file.path);
+        const meta = row.createSpan("codex-agent-diff-file-meta");
+        const counts = meta.createSpan("codex-agent-diff-file-counts");
+        this.renderDiffCounts(counts, file.added, file.removed, false);
+        meta.createSpan({ cls: `codex-agent-diff-status is-${status.key}`, text: status.label });
+        meta.createSpan({ cls: "codex-agent-diff-caret", text: expanded ? "⌃" : "⌄" });
+        if (expanded) {
+          const detail = fileBlock.createDiv("codex-agent-diff-file-detail");
+          detail.createDiv({ cls: "codex-agent-diff-file-reason", text: this.describeDiffFileReason(file) });
+          const actions = detail.createDiv("codex-agent-diff-file-actions");
+          const open = actions.createEl("button", { cls: "codex-agent-diff-action", text: "打开文件", attr: { type: "button" } });
+          open.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void this.openDiffFileForReview(file);
+          });
+          const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? "已接受" : "接受文件", attr: { type: "button" } });
+          accept.disabled = accepted;
+          accept.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          this.gitDiffAcceptedFiles.add(file.path);
+          this.gitDiffRejectedFiles.delete(file.path);
+          file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id)));
+          file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line))));
+          this.persistGitDiffReviewState();
+          renderPanelBody();
+          });
+          const reject = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "拒绝文件", attr: { type: "button" } });
+          reject.disabled = status.key !== "pending";
+          reject.setAttr("title", status.key === "pending" ? "拒绝整个文件改动" : "已有接受记录，不能再整体拒绝");
+          reject.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (reject.disabled) {
+              return;
+            }
+            void this.rejectDiffFile(file);
+          });
+          this.renderDiffFileHunks(detail, file, () => {
+            renderPanelBody();
+          });
+        }
+      });
+    };
+    const renderSectionAction = (
+      parent: HTMLElement,
+      icon: string,
+      titleText: string,
+      detailText: string,
+      prompt: string,
+      notice: string
+    ) => {
+      const action = parent.createEl("button", {
+        cls: "codex-agent-git-diff-quick-button",
+        attr: { type: "button" }
+      });
+      setIcon(action.createSpan("codex-agent-git-diff-quick-icon"), icon);
+      const actionText = action.createSpan("codex-agent-git-diff-quick-text");
+      actionText.createSpan({ cls: "codex-agent-git-diff-quick-title", text: titleText });
+      actionText.createSpan({ cls: "codex-agent-git-diff-quick-detail", text: detailText });
+      action.addEventListener("click", () => {
+        this.insertPromptText(prompt);
+        new Notice(notice);
+      });
+    };
+    const renderPanelBody = () => {
+      renderReviewSteps();
+      sectionHost.empty();
+      list.empty();
+      footerHost.empty();
+      const section = sectionHost.createDiv(`codex-agent-git-section is-${this.activeGitReviewSection}`);
+      if (this.activeGitReviewSection === "review") {
+        if (!enableReview) {
+          this.activeGitReviewSection = files.length > 0 ? "stage" : "history";
+          renderPanelBody();
+          return;
+        }
+        const quickActions = section.createDiv("codex-agent-git-diff-quick-actions is-single");
+        renderSectionAction(
+          quickActions,
+          "file-text",
+          "总结当前变更",
+          "只读分析，不暂存、不提交",
+          "请总结当前未提交变更，按文件分组说明修改目的、关键影响和需要我重点审查的风险；不要修改文件。",
+          "已填入总结当前变更的请求。"
+        );
+        this.renderDiffReviewFilters(section, files, renderPanelBody);
+        if (files.length > 0) {
+          const bulkActions = section.createDiv("codex-agent-git-diff-bulk-actions");
+          bulkActions.createEl("button", { cls: "codex-agent-diff-action", text: "全部接受", attr: { type: "button" } })
+            .addEventListener("click", () => this.confirmAcceptAllDiffFiles(files, refreshReview));
+          bulkActions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "全部拒绝", attr: { type: "button" } })
+            .addEventListener("click", () => this.confirmRejectAllDiffFiles(files));
+        }
+        this.renderGitBoundaryNote(section, enableGitSections);
+        renderFiles();
+        this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
+        return;
+      }
+      if (this.activeGitReviewSection === "stage") {
+        this.renderGitOperationSection(
+          section,
+          "git-pull-request",
+          "暂存变更",
+          "暂存是 Git 的提交候选区，和上方审查标记相互独立。请先查看 Git 状态，再明确选择要暂存的文件。",
+          "选择暂存",
+          "请查看当前 Git 状态，列出工作区改动和暂存区内容；不要自动暂存，先让我选择要暂存的文件。",
+          "已新建 Agent 并发送 Git 暂存请求。",
+          true
+        );
+        this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
+        return;
+      }
+      if (this.activeGitReviewSection === "commit") {
+        this.renderGitOperationSection(
+          section,
+          "git-commit",
+          "提交版本",
+          "提交会把暂存区保存成一次 Git 历史版本。提交前应先确认工作区、暂存区和提交说明，避免把未审查内容混进去。",
+          "提交变更",
+          "请检查当前 Git 状态，确认工作区和暂存区没有明显问题后，暂存相关文件并创建一次语义清晰的 Git 提交。提交前先说明将包含哪些文件。",
+          "已新建 Agent 并发送 Git 提交请求。",
+          true
+        );
+        this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
+        return;
+      }
+      this.renderGitOperationSection(
+        section,
+        "history",
+        "版本记录",
+        "版本记录只查看已经提交过的历史。这里适合对比、回看或讨论回退方案，不会改动当前文件。",
+        "查看记录",
+        "请查看最近 Git 提交记录，按时间列出版本说明，并提示是否存在适合回退或对比的版本；不要修改文件。",
+        "已填入查看版本记录的请求。"
+      );
+      this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
+    };
+    refreshReview = () => {
+      renderPanelBody();
+    };
+    renderPanelBody();
+  }
+
+  private pruneGitDiffReviewState(files: DiffFileView[]) {
+    const filePaths = new Set(files.map((file) => file.path));
+    const hunkKeys = new Set(files.flatMap((file) => file.hunks.map((hunk) => this.getDiffHunkKey(file.path, hunk.id))));
+    const lineKeys = new Set(files.flatMap((file) => file.hunks.flatMap((hunk) => hunk.lines.map((line) => this.getDiffLineKey(file.path, hunk.id, line)))));
+    this.gitDiffAcceptedFiles = new Set([...this.gitDiffAcceptedFiles].filter((filePath) => filePaths.has(filePath)));
+    this.gitDiffRejectedFiles = new Set([...this.gitDiffRejectedFiles].filter((filePath) => filePaths.has(filePath)));
+    this.gitDiffAcceptedHunks = new Set([...this.gitDiffAcceptedHunks].filter((hunkKey) => hunkKeys.has(hunkKey)));
+    this.gitDiffAcceptedLines = new Set([...this.gitDiffAcceptedLines].filter((lineKey) => lineKeys.has(lineKey)));
+    this.persistGitDiffReviewState();
+  }
+
+  private renderDiffReviewFilters(parent: HTMLElement, files: DiffFileView[], refresh: () => void) {
+    if (files.length === 0) {
+      return;
+    }
+    const statusCounts = files.reduce<Record<string, number>>((counts, file) => {
+      const status = this.getDiffFileReviewStatus(file).key;
+      counts[status] = (counts[status] ?? 0) + 1;
+      return counts;
+    }, {});
+    const filters: Array<{ key: DiffReviewFilter; label: string; count: number }> = [
+      { key: "active", label: "待审查", count: (statusCounts.pending ?? 0) + (statusCounts.partial ?? 0) },
+      { key: "accepted", label: "已接受", count: statusCounts.accepted ?? 0 },
+      { key: "rejected", label: "已拒绝", count: statusCounts.rejected ?? 0 },
+      { key: "all", label: "全部", count: files.length }
+    ];
+    const bar = parent.createDiv("codex-agent-diff-filter-bar");
+    filters.forEach((filter) => {
+      const button = bar.createEl("button", {
+        cls: `codex-agent-diff-filter ${this.gitDiffReviewFilter === filter.key ? "is-active" : ""}`,
+        attr: { type: "button" }
+      });
+      button.createSpan({ text: filter.label });
+      button.createSpan({ cls: "codex-agent-diff-filter-count", text: String(filter.count) });
+      button.addEventListener("click", () => {
+        this.gitDiffReviewFilter = filter.key;
+        refresh();
+      });
+    });
+  }
+
+  private getFilteredDiffFiles(files: DiffFileView[]) {
+    return files.filter((file) => this.matchesDiffReviewFilter(file, this.gitDiffReviewFilter));
+  }
+
+  private matchesDiffReviewFilter(file: DiffFileView, filter: DiffReviewFilter) {
+    const status = this.getDiffFileReviewStatus(file).key;
+    if (filter === "all") {
+      return true;
+    }
+    if (filter === "active") {
+      return status === "pending" || status === "partial";
+    }
+    return status === filter;
+  }
+
+  private confirmAcceptAllDiffFiles(files: DiffFileView[], refresh: () => void) {
+    new CodexConfirmModal(
+      this.app,
+      "接受所有文件？",
+      `这会把当前 ${files.length} 个文件标记为已接受。文件内容不会额外改动，因为这些修改已经在工作区中。`,
+      "确认接受",
+      false,
+      () => {
+        files.forEach((file) => {
+          this.gitDiffAcceptedFiles.add(file.path);
+          this.gitDiffRejectedFiles.delete(file.path);
+          file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id)));
+          file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line))));
+        });
+        this.persistGitDiffReviewState();
+        refresh();
+        new Notice(`已接受 ${files.length} 个文件。`);
+      }
+    ).open();
+  }
+
+  private confirmRejectAllDiffFiles(files: DiffFileView[]) {
+    new CodexConfirmModal(
+      this.app,
+      "拒绝所有文件？",
+      `这会实际撤回当前 ${files.length} 个文件的工作区修改。此操作会反向应用 patch，请确认这些改动都不要保留。`,
+      "确认拒绝",
+      true,
+      () => void this.rejectAllDiffFiles(files)
+    ).open();
+  }
+
+  private async rejectAllDiffFiles(files: DiffFileView[]) {
+    const cwd = this.getVaultBasePath();
+    if (!cwd) {
+      new Notice("Cannot locate vault path.");
+      return;
+    }
+    const patch = files.map((file) => this.buildDiffPatch(file, file.hunks)).join("");
+    const result = await this.runGit(["apply", "--reverse", "--whitespace=nowarn", "-"], cwd, patch);
+    if (!result.ok) {
+      new Notice("Could not reject all changes. Some files may have changed since preview.");
+      return;
+    }
+    files.forEach((file) => {
+      this.gitDiffAcceptedFiles.delete(file.path);
+      this.gitDiffRejectedFiles.add(file.path);
+      file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.delete(this.getDiffHunkKey(file.path, hunk.id)));
+      file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.delete(this.getDiffLineKey(file.path, hunk.id, line))));
+    });
+    this.persistGitDiffReviewState();
+    new Notice(`Rejected changes in ${files.length} files.`);
+    await this.reloadGitDiffPanel(cwd);
+  }
+
+  private renderGitReviewSteps(
+    parent: HTMLElement,
+    files: DiffFileView[],
+    activeSection: GitReviewSection,
+    enableReview: boolean,
+    onSelect: (section: GitReviewSection) => void
+  ) {
+    const hasFiles = files.length > 0;
+    const steps = parent.createDiv("codex-agent-git-review-steps");
+    const items: Array<{ section: GitReviewSection; label: string; detail: string }> = [];
+    if (enableReview) {
+      items.push({ section: "review", label: "审查改动", detail: hasFiles ? "接受或拒绝文件改动" : "没有待审查文件" });
+    }
+    items.push(
+      { section: "stage", label: "Git 暂存", detail: hasFiles ? "管理提交候选区" : "查看暂存区" },
+      { section: "commit", label: "Git 提交", detail: hasFiles ? "创建一次提交" : "检查提交状态" },
+      { section: "history", label: "版本记录", detail: "查看提交历史" }
+    );
+    items.forEach((step) => {
+      const item = steps.createEl("button", {
+        cls: `codex-agent-git-review-step ${activeSection === step.section ? "is-active" : ""}`,
+        attr: { type: "button" }
+      });
+      item.addEventListener("click", () => onSelect(step.section));
+      const text = item.createSpan("codex-agent-git-review-step-text");
+      text.createSpan({ cls: "codex-agent-git-review-step-label", text: step.label });
+      text.createSpan({ cls: "codex-agent-git-review-step-detail", text: step.detail });
+    });
+  }
+
+  private renderGitOperationSection(
+    parent: HTMLElement,
+    icon: string,
+    titleText: string,
+    detailText: string,
+    actionText: string,
+    prompt: string,
+    notice: string,
+    autoRunInNewAgent = false
+  ) {
+    const card = parent.createDiv("codex-agent-git-operation-card");
+    const iconEl = card.createSpan("codex-agent-git-operation-icon");
+    setIcon(iconEl, icon);
+    const body = card.createDiv("codex-agent-git-operation-body");
+    body.createDiv({ cls: "codex-agent-git-operation-title", text: titleText });
+    body.createDiv({ cls: "codex-agent-git-operation-detail", text: detailText });
+    const action = card.createEl("button", { cls: "codex-agent-diff-action", text: actionText, attr: { type: "button" } });
+    action.addEventListener("click", () => {
+      if (autoRunInNewAgent) {
+        this.startPromptInNewAgent(prompt, notice);
+        return;
+      }
+      this.insertPromptText(prompt);
+      new Notice(notice);
+    });
+  }
+
+  private renderGitBoundaryNote(parent: HTMLElement, enableGitSections: boolean) {
+    const note = parent.createDiv("codex-agent-git-boundary-note");
+    note.createSpan({ cls: "codex-agent-git-boundary-kicker", text: "边界说明" });
+    note.createSpan({
+      cls: "codex-agent-git-boundary-text",
+      text: enableGitSections
+        ? "审查的接受/拒绝只影响是否保留工作区内容；Git 暂存/提交只管理版本记录，暂存时不会自动读取审查标记。"
+        : "这里是审查模式：接受表示保留改动，拒绝会撤回改动；不涉及 Git 暂存、提交或历史版本。"
+    });
+  }
+
+  private renderGitFooter(parent: HTMLElement, activeSection: GitReviewSection, enableGitSections: boolean) {
+    const footer = parent.createDiv("codex-agent-git-review-footer");
+    const sectionLabels: Record<GitReviewSection, string> = {
+      review: "审查改动",
+      stage: "暂存变更",
+      commit: "提交版本",
+      history: "版本记录"
+    };
+    const summary = footer.createDiv("codex-agent-git-review-footer-summary");
+    summary.createSpan({ text: enableGitSections ? `当前 ${sectionLabels[activeSection]}` : "当前 只审查改动" });
+  }
+
+  private getGitReviewAggregate(files: DiffFileView[]) {
+    const accepted = files.filter((file) => this.getDiffFileReviewStatus(file).key === "accepted").length;
+    const rejected = files.filter((file) => this.getDiffFileReviewStatus(file).key === "rejected").length;
+    const partial = files.filter((file) => this.getDiffFileReviewStatus(file).key === "partial").length;
+    const reviewed = accepted + rejected + partial;
+    return {
+      accepted,
+      rejected,
+      partial,
+      reviewed,
+      pending: Math.max(files.length - reviewed, 0)
+    };
+  }
+
+  private getDiffFileReviewStatus(file: DiffFileView): { key: string; label: string } {
+    if (this.gitDiffRejectedFiles.has(file.path)) {
+      return { key: "rejected", label: "已拒绝" };
+    }
+    if (this.gitDiffAcceptedFiles.has(file.path)) {
+      return { key: "accepted", label: "已接受" };
+    }
+    const acceptedHunks = file.hunks.filter((hunk) => this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, hunk.id))).length;
+    if (acceptedHunks > 0) {
+      return { key: acceptedHunks >= file.hunks.length ? "accepted" : "partial", label: acceptedHunks >= file.hunks.length ? "已接受" : "部分接受" };
+    }
+    return { key: "pending", label: "未处理" };
+  }
+
+  private renderDiffFileHunks(parent: HTMLElement, file: DiffFileView, onChange: () => void) {
+    if (file.hunks.length === 0) {
+      this.renderDiffFileLines(parent, file);
+      return;
+    }
+    file.hunks.forEach((hunk, index) => {
+      const accepted = this.gitDiffAcceptedFiles.has(file.path) || this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, hunk.id));
+      const block = parent.createDiv(`codex-agent-diff-hunk ${accepted ? "is-accepted" : ""}`);
+      const head = block.createDiv("codex-agent-diff-hunk-head");
+      head.createSpan({ cls: "codex-agent-diff-hunk-title", text: `Hunk ${index + 1}` });
+      head.createSpan({ cls: "codex-agent-diff-hunk-header", text: hunk.header });
+      const counts = head.createSpan("codex-agent-diff-file-counts");
+      this.renderDiffCounts(counts, hunk.added, hunk.removed, false);
+      const actions = head.createSpan("codex-agent-diff-hunk-actions");
+      const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? "Accepted" : "Accept hunk", attr: { type: "button" } });
+      accept.disabled = accepted;
+      accept.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id));
+        hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line)));
+        this.gitDiffRejectedFiles.delete(file.path);
+        if (file.hunks.every((entry) => this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, entry.id)))) {
+          this.gitDiffAcceptedFiles.add(file.path);
+        }
+        this.persistGitDiffReviewState();
+        onChange();
+      });
+      const reject = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "Reject hunk", attr: { type: "button" } });
+      reject.disabled = accepted;
+      reject.setAttr("title", accepted ? "已接受的 hunk 不能再拒绝" : "拒绝此 hunk");
+      reject.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (reject.disabled) {
+          return;
+        }
+        void this.rejectDiffHunk(file, hunk);
+      });
+
+      const table = block.createDiv("codex-agent-diff-lines");
+      table.toggleClass("has-line-numbers", this.owner.getSettings().diffLineNumbers);
+      hunk.lines.forEach((line) => this.renderDiffLine(table, line));
+    });
+  }
+
+  private renderDiffLine(parent: HTMLElement, line: DiffLineView) {
+    const row = parent.createDiv(`codex-agent-diff-line is-${line.type}`);
+    if (line.type === "hunk") {
+      if (this.owner.getSettings().diffLineNumbers) {
+        row.createSpan({ cls: "codex-agent-diff-line-number", text: "" });
+        row.createSpan({ cls: "codex-agent-diff-line-number", text: "" });
+      }
+      row.createSpan({ cls: "codex-agent-diff-line-code", text: line.text });
+      return;
+    }
+    if (this.owner.getSettings().diffLineNumbers) {
+      row.createSpan({ cls: "codex-agent-diff-line-number", text: line.oldLine ? String(line.oldLine) : "" });
+      row.createSpan({ cls: "codex-agent-diff-line-number", text: line.newLine ? String(line.newLine) : "" });
+    }
+    row.createSpan({ cls: "codex-agent-diff-line-code", text: line.text });
+  }
+
+  private getDiffHunkKey(filePath: string, hunkId: string) {
+    return `${filePath}::${hunkId}`;
+  }
+
+  private getDiffLineKey(filePath: string, hunkId: string, line: DiffLineView) {
+    const lineNo = line.type === "remove" ? line.oldLine : line.newLine;
+    return `${filePath}::${hunkId}::${line.type}:${lineNo ?? "?"}:${line.text}`;
+  }
+
+  private describeDiffFileReason(file: DiffFileView) {
+    const action = file.added > 0 && file.removed > 0
+      ? "updates existing content"
+      : file.added > 0
+        ? "adds new content"
+        : "removes existing content";
+    const hunkText = file.hunks.length === 1 ? "1 local change block" : `${file.hunks.length} local change blocks`;
+    return `Reason: ${file.path} ${action} across ${hunkText}. Review this file before keeping or reverting the change.`;
+  }
+
+  private async rejectDiffFile(file: DiffFileView) {
+    const cwd = this.getVaultBasePath();
+    if (!cwd) {
+      new Notice("Cannot locate vault path.");
+      return;
+    }
+    const patch = this.buildDiffPatch(file, file.hunks);
+    const result = await this.runGit(["apply", "--reverse", "--whitespace=nowarn", "-"], cwd, patch);
+    if (!result.ok) {
+      new Notice("Could not reject file changes. The file may have changed since preview.");
+      return;
+    }
+    this.gitDiffAcceptedFiles.delete(file.path);
+    file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.delete(this.getDiffHunkKey(file.path, hunk.id)));
+    file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.delete(this.getDiffLineKey(file.path, hunk.id, line))));
+    this.gitDiffRejectedFiles.add(file.path);
+    this.persistGitDiffReviewState();
+    new Notice(`Rejected changes in ${file.path}.`);
+    await this.reloadGitDiffPanel(cwd);
+  }
+
+  private async rejectDiffHunk(file: DiffFileView, hunk: DiffHunkView) {
+    const cwd = this.getVaultBasePath();
+    if (!cwd) {
+      new Notice("Cannot locate vault path.");
+      return;
+    }
+    const patch = this.buildDiffPatch(file, [hunk]);
+    const result = await this.runGit(["apply", "--reverse", "--whitespace=nowarn", "-"], cwd, patch);
+    if (!result.ok) {
+      new Notice("Could not reject hunk. The file may have changed since preview.");
+      return;
+    }
+    this.gitDiffAcceptedHunks.delete(this.getDiffHunkKey(file.path, hunk.id));
+    hunk.lines.forEach((line) => this.gitDiffAcceptedLines.delete(this.getDiffLineKey(file.path, hunk.id, line)));
+    this.persistGitDiffReviewState();
+    new Notice(`Rejected hunk in ${file.path}.`);
+    await this.reloadGitDiffPanel(cwd);
+    await this.refreshEditorReviewAfterFileChange(file.path, this.getNextDiffHunkId(file, hunk));
+  }
+
+  private async openDiffFileForReview(file: DiffFileView) {
+    const target = this.getVaultItemByPath(file.path);
+    if (!(target instanceof TFile)) {
+      new Notice(`Cannot open ${file.path}.`);
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(target, { active: true, state: { mode: "source", source: true } });
+    await leaf.setViewState({
+      type: "markdown",
+      state: { file: target.path, mode: "source", source: true },
+      active: true
+    });
+    this.app.workspace.revealLeaf(leaf);
+    this.renderGitDiffEditorReviewBar(file);
+    this.focusDiffHunkInEditor(file, file.hunks[0]);
+  }
+
+  private renderGitDiffEditorReviewBar(file: DiffFileView) {
+    this.closeGitDiffEditorReviewBar();
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView) {
+      return;
+    }
+    const bar = activeView.contentEl.createDiv("codex-agent-editor-review-bar");
+    activeView.contentEl.prepend(bar);
+    this.gitDiffEditorReviewBarEl = bar;
+    const title = bar.createDiv("codex-agent-editor-review-title");
+    title.createSpan({ cls: "codex-agent-editor-review-kicker", text: "正在审查" });
+    title.createSpan({ cls: "codex-agent-editor-review-file", text: this.cleanDiffPath(file.path) });
+    const counts = title.createSpan("codex-agent-diff-file-counts");
+    this.renderDiffCounts(counts, file.added, file.removed, false);
+    const actions = bar.createDiv("codex-agent-editor-review-actions");
+    const fileHasAcceptedReview = this.hasAcceptedDiffReviewInFile(file);
+    const acceptAll = actions.createEl("button", { cls: "codex-agent-diff-action", text: fileHasAcceptedReview ? "已全部接受" : "全部接受", attr: { type: "button" } });
+    acceptAll.disabled = fileHasAcceptedReview;
+    acceptAll.setAttr("title", fileHasAcceptedReview ? "已接受的改动不会再显示为待处理 diff" : "接受全部改动");
+    acceptAll.addEventListener("click", () => {
+        if (acceptAll.disabled) {
+          return;
+        }
+        this.gitDiffAcceptedFiles.add(file.path);
+        this.gitDiffRejectedFiles.delete(file.path);
+        file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id)));
+        file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line))));
+        this.persistGitDiffReviewState();
+        new Notice(`Accepted changes in ${file.path}.`);
+        void this.reloadActiveGitDiffPanel();
+        this.renderGitDiffEditorReviewBar(file);
+      });
+    const rejectAll = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "全部拒绝", attr: { type: "button" } });
+    rejectAll.disabled = fileHasAcceptedReview;
+    rejectAll.setAttr("title", fileHasAcceptedReview ? "已有接受记录，不能再全部拒绝" : "拒绝全部改动");
+    rejectAll.addEventListener("click", () => {
+      if (rejectAll.disabled) {
+        return;
+      }
+      void this.rejectDiffFile(file);
+    });
+    actions.createEl("button", { cls: "codex-agent-diff-action", text: "上一处", attr: { type: "button" } })
+      .addEventListener("click", () => this.focusAdjacentDiffHunk(file, -1));
+    actions.createEl("button", { cls: "codex-agent-diff-action", text: "下一处", attr: { type: "button" } })
+      .addEventListener("click", () => this.focusAdjacentDiffHunk(file, 1));
+    actions.createEl("button", { cls: "codex-agent-diff-action", text: "关闭审查窗口", attr: { type: "button" } })
+      .addEventListener("click", () => this.closeReviewEditorLeaf(activeView));
+
+    const overview = bar.createDiv("codex-agent-editor-review-overview");
+    file.hunks.forEach((hunk, index) => {
+      const status = this.getDiffHunkReviewStatus(file, hunk);
+      const chip = overview.createEl("button", {
+        cls: `codex-agent-editor-review-hunk-chip is-${status}`,
+        attr: { type: "button", title: hunk.header }
+      });
+      chip.createSpan({ text: `H${index + 1}` });
+      chip.createSpan({ cls: "codex-agent-editor-review-hunk-chip-count", text: `+${hunk.added} -${hunk.removed}` });
+      chip.addEventListener("click", () => this.focusDiffHunkInEditor(file, hunk));
+    });
+
+    this.applyInlineDiffEditorDecorations(activeView, file);
+  }
+
+  handleInlineDiffAction(action: InlineDiffAction) {
+    const file = this.inlineDiffReviewFile;
+    if (!file || file.path !== action.filePath) {
+      return;
+    }
+    const hunk = file.hunks.find((entry) => entry.id === action.hunkId);
+    if (!hunk) {
+      return;
+    }
+    if (action.action === "reject-hunk" && this.getDiffHunkReviewStatus(file, hunk) === "accepted") {
+      new Notice("This hunk is already accepted.");
+      return;
+    }
+    if (action.action === "accept-hunk") {
+      this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id));
+      hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line)));
+      this.gitDiffRejectedFiles.delete(file.path);
+      if (file.hunks.every((entry) => this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, entry.id)))) {
+        this.gitDiffAcceptedFiles.add(file.path);
+      }
+      this.persistGitDiffReviewState();
+      new Notice(`Accepted hunk in ${file.path}.`);
+      this.renderGitDiffEditorReviewBar(file);
+      this.focusNextPendingDiffHunk(file, hunk);
+      void this.reloadActiveGitDiffPanel();
+      return;
+    }
+    if (action.action === "reject-hunk") {
+      void this.rejectDiffHunk(file, hunk);
+      return;
+    }
+    const line = action.lineKey ? hunk.lines.find((entry) => this.getDiffLineKey(file.path, hunk.id, entry) === action.lineKey) : null;
+    if (!line) {
+      return;
+    }
+    const lineAlreadyAccepted = this.gitDiffAcceptedFiles.has(file.path)
+      || this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, hunk.id))
+      || this.gitDiffAcceptedLines.has(this.getDiffLineKey(file.path, hunk.id, line));
+    if (action.action === "reject-line" && lineAlreadyAccepted) {
+      new Notice("This line is already accepted.");
+      return;
+    }
+    if (action.action === "accept-line") {
+      this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line));
+      this.gitDiffRejectedFiles.delete(file.path);
+      if (hunk.lines.every((entry) => entry.type !== "add" && entry.type !== "remove" || this.gitDiffAcceptedLines.has(this.getDiffLineKey(file.path, hunk.id, entry)))) {
+        this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id));
+      }
+      if (file.hunks.every((entry) => this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, entry.id)))) {
+        this.gitDiffAcceptedFiles.add(file.path);
+      }
+      this.persistGitDiffReviewState();
+      new Notice(`Accepted line in ${file.path}.`);
+      this.renderGitDiffEditorReviewBar(file);
+      this.focusNextPendingDiffHunk(file, hunk);
+      void this.reloadActiveGitDiffPanel();
+      return;
+    }
+    void this.rejectDiffLineInEditor(file, hunk, line);
+  }
+
+  private applyInlineDiffEditorDecorations(markdownView: MarkdownView, file: DiffFileView) {
+    const editorView = this.getCodeMirrorEditorView(markdownView);
+    if (!editorView) {
+      return;
+    }
+    activeInlineDiffReviewController = this;
+    this.inlineDiffEditorView = editorView;
+    this.inlineDiffReviewFile = file;
+    editorView.dispatch({
+      effects: setInlineDiffReviewEffect.of({
+        file,
+        acceptedFiles: [...this.gitDiffAcceptedFiles],
+        acceptedHunks: [...this.gitDiffAcceptedHunks],
+        acceptedLines: [...this.gitDiffAcceptedLines]
+      })
+    });
+  }
+
+  private clearInlineDiffEditorDecorations() {
+    if (this.inlineDiffEditorView) {
+      this.inlineDiffEditorView.dispatch({ effects: setInlineDiffReviewEffect.of(null) });
+    }
+    this.inlineDiffEditorView = null;
+    this.inlineDiffReviewFile = null;
+    if (activeInlineDiffReviewController === this) {
+      activeInlineDiffReviewController = null;
+    }
+  }
+
+  private getCodeMirrorEditorView(markdownView: MarkdownView): EditorView | null {
+    return (markdownView.editor as any).cm instanceof EditorView
+      ? (markdownView.editor as any).cm
+      : null;
+  }
+
+  private renderEditorReviewLines(parent: HTMLElement, file: DiffFileView, hunk: DiffHunkView) {
+    const changes = hunk.lines.filter((line) => line.type === "add" || line.type === "remove");
+    if (changes.length === 0) {
+      return;
+    }
+    const list = parent.createDiv("codex-agent-editor-review-lines");
+    changes.forEach((line) => {
+      const accepted = this.gitDiffAcceptedFiles.has(file.path)
+        || this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, hunk.id))
+        || this.gitDiffAcceptedLines.has(this.getDiffLineKey(file.path, hunk.id, line));
+      const row = list.createDiv(`codex-agent-editor-review-line is-${line.type} ${accepted ? "is-accepted" : ""}`);
+      row.createSpan({
+        cls: "codex-agent-editor-review-line-marker",
+        text: line.type === "add" ? "+" : "-"
+      });
+      row.createSpan({
+        cls: "codex-agent-editor-review-line-number",
+        text: String(line.type === "add" ? line.newLine ?? "" : line.oldLine ?? "")
+      });
+      row.createSpan({ cls: "codex-agent-editor-review-line-code", text: line.text || " " });
+      const actions = row.createSpan("codex-agent-editor-review-line-actions");
+      actions.createEl("button", { cls: "codex-agent-diff-action", text: "定位", attr: { type: "button" } })
+        .addEventListener("click", () => this.focusDiffLineInEditor(file, hunk, line));
+      const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? "已接受" : "接受", attr: { type: "button" } });
+      accept.disabled = accepted;
+      accept.addEventListener("click", () => {
+        this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line));
+        this.gitDiffRejectedFiles.delete(file.path);
+        if (hunk.lines.every((entry) => entry.type !== "add" && entry.type !== "remove" || this.gitDiffAcceptedLines.has(this.getDiffLineKey(file.path, hunk.id, entry)))) {
+          this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id));
+        }
+        if (file.hunks.every((entry) => this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, entry.id)))) {
+          this.gitDiffAcceptedFiles.add(file.path);
+        }
+        this.persistGitDiffReviewState();
+        new Notice(`Accepted line in ${file.path}.`);
+        this.renderGitDiffEditorReviewBar(file);
+        this.focusNextPendingDiffHunk(file, hunk);
+      });
+      actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "拒绝", attr: { type: "button" } })
+        .addEventListener("click", () => void this.rejectDiffLineInEditor(file, hunk, line));
+    });
+  }
+
+  private getDiffHunkReviewStatus(file: DiffFileView, hunk: DiffHunkView) {
+    if (this.gitDiffAcceptedFiles.has(file.path) || this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, hunk.id))) {
+      return "accepted";
+    }
+    const changedLines = hunk.lines.filter((line) => line.type === "add" || line.type === "remove");
+    const acceptedLines = changedLines.filter((line) => this.gitDiffAcceptedLines.has(this.getDiffLineKey(file.path, hunk.id, line))).length;
+    if (acceptedLines > 0) {
+      return acceptedLines >= changedLines.length ? "accepted" : "partial";
+    }
+    return "pending";
+  }
+
+  private hasAcceptedDiffReviewInFile(file: DiffFileView) {
+    return this.gitDiffAcceptedFiles.has(file.path)
+      || file.hunks.some((hunk) => this.gitDiffAcceptedHunks.has(this.getDiffHunkKey(file.path, hunk.id)))
+      || file.hunks.some((hunk) => hunk.lines.some((line) => this.gitDiffAcceptedLines.has(this.getDiffLineKey(file.path, hunk.id, line))));
+  }
+
+  private focusAdjacentDiffHunk(file: DiffFileView, direction: 1 | -1, currentHunk?: DiffHunkView) {
+    if (file.hunks.length === 0) {
+      return;
+    }
+    const currentIndex = currentHunk ? file.hunks.findIndex((hunk) => hunk.id === currentHunk.id) : this.findNearestDiffHunkIndex(file);
+    const start = currentIndex >= 0 ? currentIndex : direction > 0 ? -1 : 0;
+    for (let offset = 1; offset <= file.hunks.length; offset += 1) {
+      const index = (start + direction * offset + file.hunks.length) % file.hunks.length;
+      this.focusDiffHunkInEditor(file, file.hunks[index]);
+      return;
+    }
+  }
+
+  private focusNextPendingDiffHunk(file: DiffFileView, currentHunk: DiffHunkView) {
+    const currentIndex = file.hunks.findIndex((hunk) => hunk.id === currentHunk.id);
+    for (let offset = 1; offset <= file.hunks.length; offset += 1) {
+      const index = (currentIndex + offset) % file.hunks.length;
+      const hunk = file.hunks[index];
+      if (this.getDiffHunkReviewStatus(file, hunk) !== "accepted") {
+        this.focusDiffHunkInEditor(file, hunk);
+        return;
+      }
+    }
+  }
+
+  private getNextDiffHunkId(file: DiffFileView, currentHunk: DiffHunkView) {
+    const currentIndex = file.hunks.findIndex((hunk) => hunk.id === currentHunk.id);
+    if (currentIndex < 0 || file.hunks.length <= 1) {
+      return file.hunks[0]?.id;
+    }
+    return file.hunks[(currentIndex + 1) % file.hunks.length]?.id;
+  }
+
+  private findNearestDiffHunkIndex(file: DiffFileView) {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView) {
+      return 0;
+    }
+    const currentLine = activeView.editor.getCursor().line + 1;
+    let nearestIndex = 0;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    file.hunks.forEach((hunk, index) => {
+      const line = this.getHunkFirstChangedLine(hunk);
+      const distance = Math.abs(line - currentLine);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+    return nearestIndex;
+  }
+
+  private getHunkFirstChangedLine(hunk: DiffHunkView) {
+    const firstChange = hunk.lines.find((line) => line.type === "add" || line.type === "remove");
+    if (!firstChange) {
+      return this.getHunkNewStartLine(hunk);
+    }
+    return firstChange.type === "add"
+      ? firstChange.newLine ?? this.getHunkNewStartLine(hunk)
+      : this.findRemovedLineAnchor(hunk, firstChange);
+  }
+
+  private findRemovedLineAnchor(hunk: DiffHunkView, line: DiffLineView) {
+    const index = hunk.lines.indexOf(line);
+    for (let cursor = index + 1; cursor < hunk.lines.length; cursor += 1) {
+      const next = hunk.lines[cursor];
+      if ((next.type === "context" || next.type === "add") && typeof next.newLine === "number") {
+        return next.newLine;
+      }
+    }
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const previous = hunk.lines[cursor];
+      if ((previous.type === "context" || previous.type === "add") && typeof previous.newLine === "number") {
+        return previous.newLine;
+      }
+    }
+    return this.getHunkNewStartLine(hunk);
+  }
+
+  private closeGitDiffEditorReviewBar() {
+    this.gitDiffEditorReviewBarEl?.remove();
+    this.gitDiffEditorReviewBarEl = null;
+    this.clearInlineDiffEditorDecorations();
+  }
+
+  private closeReviewEditorLeaf(markdownView: MarkdownView) {
+    this.closeGitDiffEditorReviewBar();
+    markdownView.leaf.detach();
+  }
+
+  private focusDiffHunkInEditor(file: DiffFileView, hunk?: DiffHunkView) {
+    if (!hunk) {
+      return;
+    }
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView) {
+      return;
+    }
+    const anchorLine = this.getHunkFirstChangedLine(hunk);
+    activeView.editor.setCursor({ line: Math.max(anchorLine - 1, 0), ch: 0 });
+    activeView.editor.scrollIntoView({ from: { line: Math.max(anchorLine - 1, 0), ch: 0 }, to: { line: Math.max(anchorLine - 1, 0), ch: 0 } }, true);
+    activeView.editor.focus();
+  }
+
+  private focusDiffLineInEditor(file: DiffFileView, hunk: DiffHunkView, line: DiffLineView) {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView) {
+      return;
+    }
+    const lineIndex = this.findEditorLineIndex(activeView.editor, line.newLine ?? this.getHunkNewStartLine(hunk), line.text);
+    const targetLine = lineIndex >= 0 ? lineIndex : Math.max((line.newLine ?? this.getHunkNewStartLine(hunk)) - 1, 0);
+    activeView.editor.setCursor({ line: targetLine, ch: 0 });
+    activeView.editor.scrollIntoView({ from: { line: targetLine, ch: 0 }, to: { line: targetLine, ch: 0 } }, true);
+    activeView.editor.focus();
+  }
+
+  private async rejectDiffLineInEditor(file: DiffFileView, hunk: DiffHunkView, line: DiffLineView) {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || activeView.file?.path !== file.path) {
+      new Notice(`Open ${file.path} before rejecting a line.`);
+      return;
+    }
+    const editor = activeView.editor;
+    if (line.type === "add") {
+      const lineIndex = this.findEditorLineIndex(editor, line.newLine ?? this.getHunkNewStartLine(hunk), line.text);
+      if (lineIndex < 0) {
+        new Notice("Could not find the added line in the editor.");
+        return;
+      }
+      const nextLine = Math.min(lineIndex + 1, editor.lineCount());
+      if (lineIndex + 1 < editor.lineCount()) {
+        editor.replaceRange("", { line: lineIndex, ch: 0 }, { line: nextLine, ch: 0 });
+      } else {
+        const previousLine = Math.max(lineIndex - 1, 0);
+        const from = lineIndex === 0 ? { line: 0, ch: 0 } : { line: previousLine, ch: editor.getLine(previousLine).length };
+        editor.replaceRange("", from, { line: lineIndex, ch: editor.getLine(lineIndex).length });
+      }
+    } else if (line.type === "remove") {
+      const insertIndex = this.findRemovedLineInsertIndex(editor, hunk, line);
+      editor.replaceRange(`${line.text}\n`, { line: insertIndex, ch: 0 });
+    } else {
+      return;
+    }
+    this.gitDiffAcceptedLines.delete(this.getDiffLineKey(file.path, hunk.id, line));
+    this.gitDiffAcceptedHunks.delete(this.getDiffHunkKey(file.path, hunk.id));
+    this.gitDiffAcceptedFiles.delete(file.path);
+    this.persistGitDiffReviewState();
+    if (activeView.file) {
+      await this.app.vault.modify(activeView.file, editor.getValue());
+    }
+    new Notice(`Rejected line in ${file.path}.`);
+    await this.reloadActiveGitDiffPanel();
+    await this.refreshEditorReviewAfterFileChange(file.path, this.getNextDiffHunkId(file, hunk));
+  }
+
+  private async refreshEditorReviewAfterFileChange(filePath: string, preferredHunkId?: string) {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || activeView.file?.path !== filePath) {
+      return;
+    }
+    const cwd = this.getVaultBasePath();
+    if (!cwd) {
+      this.closeGitDiffEditorReviewBar();
+      return;
+    }
+    const diffResult = await this.runGit(["-c", "core.quotepath=false", "diff", "--", "."], cwd);
+    if (!diffResult.ok) {
+      this.closeGitDiffEditorReviewBar();
+      return;
+    }
+    const nextFile = this.parseDiffStats(diffResult.stdout).files.find((entry) => entry.path === filePath);
+    if (!nextFile) {
+      this.closeGitDiffEditorReviewBar();
+      return;
+    }
+    this.renderGitDiffEditorReviewBar(nextFile);
+    const target = preferredHunkId
+      ? nextFile.hunks.find((hunk) => hunk.id === preferredHunkId) ?? nextFile.hunks[0]
+      : nextFile.hunks[0];
+    this.focusDiffHunkInEditor(nextFile, target);
+  }
+
+  private findEditorLineIndex(editor: Editor, expectedOneBased: number, text: string) {
+    const expected = Math.max(expectedOneBased - 1, 0);
+    const max = editor.lineCount();
+    const matches = (index: number) => editor.getLine(index) === text;
+    for (let index = Math.max(expected - 6, 0); index < Math.min(expected + 7, max); index += 1) {
+      if (matches(index)) {
+        return index;
+      }
+    }
+    for (let index = 0; index < max; index += 1) {
+      if (matches(index)) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private findRemovedLineInsertIndex(editor: Editor, hunk: DiffHunkView, line: DiffLineView) {
+    const hunkLineIndex = hunk.lines.indexOf(line);
+    for (let index = hunkLineIndex + 1; index < hunk.lines.length; index += 1) {
+      const next = hunk.lines[index];
+      if ((next.type === "context" || next.type === "add") && typeof next.newLine === "number") {
+        const nextIndex = this.findEditorLineIndex(editor, next.newLine, next.text);
+        if (nextIndex >= 0) {
+          return nextIndex;
+        }
+      }
+    }
+    for (let index = hunkLineIndex - 1; index >= 0; index -= 1) {
+      const previous = hunk.lines[index];
+      if ((previous.type === "context" || previous.type === "add") && typeof previous.newLine === "number") {
+        const previousIndex = this.findEditorLineIndex(editor, previous.newLine, previous.text);
+        if (previousIndex >= 0) {
+          return Math.min(previousIndex + 1, editor.lineCount());
+        }
+      }
+    }
+    return Math.min(Math.max(this.getHunkNewStartLine(hunk) - 1, 0), editor.lineCount());
+  }
+
+  private getHunkNewStartLine(hunk: DiffHunkView) {
+    const match = hunk.header.match(/\+(\d+)(?:,\d+)?/);
+    return match ? Number(match[1]) : 1;
+  }
+
+  private async reloadActiveGitDiffPanel() {
+    const cwd = this.getVaultBasePath();
+    if (!cwd) {
+      return;
+    }
+    await this.reloadGitDiffPanel(cwd);
+  }
+
+  private buildDiffPatch(file: DiffFileView, hunks: DiffHunkView[]) {
+    return [
+      ...file.headerLines,
+      ...hunks.flatMap((hunk) => hunk.rawLines)
+    ].join("\n") + "\n";
+  }
+
+  private async reloadGitDiffPanel(cwd: string) {
+    await this.renderGitChanges();
+    const diffResult = await this.runGit(["-c", "core.quotepath=false", "diff", "--", "."], cwd);
+    if (!diffResult.ok) {
+      this.closeGitDiffPanel();
+      return;
+    }
+    const stats = this.parseDiffStats(diffResult.stdout);
+    if (stats.files.length === 0) {
+      this.activeGitReviewSection = "history";
+    } else if (!this.owner.getSettings().enableDiffReview && this.activeGitReviewSection === "review") {
+      this.activeGitReviewSection = "stage";
+    }
+    this.renderGitDiffPanel(stats.files, stats.added, stats.removed, true);
+  }
+
+  private closeGitDiffPanel() {
+    this.gitDiffBackdropEl?.remove();
+    this.gitDiffBackdropEl = null;
+    this.gitDiffPanelEl?.remove();
+    this.gitDiffPanelEl = null;
+  }
+
+  private startGitChangesTimer() {
+    this.stopGitChangesTimer();
+    this.gitChangesTimer = window.setInterval(() => {
+      void this.renderGitChanges();
+    }, 15000);
+  }
+
+  private stopGitChangesTimer() {
+    if (this.gitChangesTimer !== null) {
+      window.clearInterval(this.gitChangesTimer);
+      this.gitChangesTimer = null;
+    }
+  }
+
+  private getVaultBasePath() {
+    try {
+      return (this.app.vault.adapter as any).getBasePath?.() ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  private async getGitChangeStats(cwd: string): Promise<{ files: number; added: number; removed: number; untracked: number } | null> {
+    const inside = await this.runGit(["rev-parse", "--is-inside-work-tree"], cwd);
+    if (!inside.ok || inside.stdout.trim() !== "true") {
+      return null;
+    }
+    const diff = await this.runGit(["-c", "core.quotepath=false", "diff", "--numstat", "HEAD", "--"], cwd);
+    if (!diff.ok) {
+      return null;
+    }
+    let files = 0;
+    let added = 0;
+    let removed = 0;
+    diff.stdout.split(/\r?\n/).forEach((line) => {
+      if (!line.trim()) {
+        return;
+      }
+      const [addRaw, removeRaw] = line.split(/\s+/);
+      files += 1;
+      const add = Number(addRaw);
+      const remove = Number(removeRaw);
+      if (Number.isFinite(add)) {
+        added += add;
+      }
+      if (Number.isFinite(remove)) {
+        removed += remove;
+      }
+    });
+    const untrackedResult = await this.runGit(["ls-files", "--others", "--exclude-standard"], cwd);
+    const untracked = untrackedResult.ok
+      ? untrackedResult.stdout.split(/\r?\n/).filter((line) => line.trim()).length
+      : 0;
+    return { files, added, removed, untracked };
+  }
+
+  private runGit(args: string[], cwd: string, input?: string): Promise<{ ok: boolean; stdout: string }> {
+    return new Promise((resolve) => {
+      const child = spawn("git", args, { cwd, stdio: [input ? "pipe" : "ignore", "pipe", "ignore"] });
+      let stdout = "";
+      child.stdout.on("data", (chunk: any) => {
+        stdout += chunk.toString();
+      });
+      if (input && child.stdin) {
+        child.stdin.write(input);
+        child.stdin.end();
+      }
+      child.on("error", () => resolve({ ok: false, stdout: "" }));
+      child.on("close", (code: number | null) => resolve({ ok: code === 0, stdout }));
+    });
+  }
+
   private renderLiveDiff() {
     if (!this.liveDiffEl) {
       return;
     }
     this.liveDiffEl.empty();
+    if (!this.owner.getSettings().enableDiffReview) {
+      this.liveDiffEl.removeClass("is-visible");
+      return;
+    }
     const stats = this.currentDiffStats;
     if (!stats || stats.files.length === 0) {
       this.liveDiffEl.removeClass("is-visible");
@@ -3386,7 +5474,7 @@ class CodexAgentView extends ItemView {
 
     const menu = this.composerContainer.createDiv("codex-agent-aux-mode-menu");
     this.auxModeMenuEl = menu;
-    (["auto", "plan", "confirm-first", "deep-questions"] as TurnAuxMode[]).forEach((mode) => {
+    (["auto", "plan", "confirm-first", "mirror-not-echo", "deep-questions"] as TurnAuxMode[]).forEach((mode) => {
       const row = menu.createEl("button", {
         cls: `codex-agent-aux-mode-row ${this.turnAuxMode === mode ? "is-selected" : ""}`,
         attr: { type: "button" }
@@ -3448,6 +5536,9 @@ class CodexAgentView extends ItemView {
     if (mode === "confirm-first") {
       return "Confirm First";
     }
+    if (mode === "mirror-not-echo") {
+      return "Think With Me";
+    }
     if (mode === "deep-questions") {
       return "Deep Questions";
     }
@@ -3460,6 +5551,9 @@ class CodexAgentView extends ItemView {
     }
     if (mode === "confirm-first") {
       return "Restate the request and proposed approach, then wait for confirmation before working.";
+    }
+    if (mode === "mirror-not-echo") {
+      return "Test reasoning, challenge weak assumptions, and name risks clearly.";
     }
     if (mode === "deep-questions") {
       return "Ask deeper follow-up questions to clarify the request before proceeding.";
@@ -3528,8 +5622,9 @@ class CodexAgentView extends ItemView {
   }
 
   private addContextChip(chip: ContextChip) {
-    this.contextChips = [chip, ...this.contextChips];
-    this.insertChipElement(chip);
+    const normalized = this.normalizeContextChip(chip);
+    this.contextChips = [normalized, ...this.contextChips];
+    this.insertChipElement(normalized);
   }
 
   private makeContextChipId(kind: ContextChip["kind"], target: string) {
@@ -3546,39 +5641,79 @@ class CodexAgentView extends ItemView {
   }
 
   private createPromptChipElement(chip: ContextChip) {
+    const normalized = this.normalizeContextChip(chip);
     const chipEl = document.createElement("span");
-    chipEl.addClass("codex-agent-chip", `is-${chip.kind}`);
+    chipEl.addClass("codex-agent-chip", `is-${normalized.kind}`);
     chipEl.setAttr("contenteditable", "false");
-    chipEl.setAttr("data-context-id", chip.id);
-    chipEl.setAttr("data-context-kind", chip.kind);
-    chipEl.setAttr("data-context-label", chip.label);
-    if (chip.detail) {
-      chipEl.setAttr("data-context-detail", chip.detail);
+    chipEl.setAttr("data-context-id", normalized.id);
+    chipEl.setAttr("data-context-kind", normalized.kind);
+    chipEl.setAttr("data-context-label", normalized.label);
+    if (normalized.detail) {
+      chipEl.setAttr("data-context-detail", normalized.detail);
     }
-    if (chip.path) {
-      chipEl.setAttr("data-context-path", chip.path);
+    if (normalized.path) {
+      chipEl.setAttr("data-context-path", normalized.path);
     }
-    if (chip.text) {
-      chipEl.setAttr("data-context-text", chip.text);
+    if (normalized.text) {
+      chipEl.setAttr("data-context-text", normalized.text);
     }
-    const icon = chipEl.createSpan({ cls: `codex-agent-chip-icon is-${chip.kind}` });
-    setIcon(icon, this.getContextChipIcon(chip));
-    chipEl.createSpan({ cls: "codex-agent-chip-label", text: chip.label });
+    const icon = chipEl.createSpan({ cls: `codex-agent-chip-icon is-${normalized.kind}` });
+    setIcon(icon, this.getContextChipIcon(normalized));
+    chipEl.createSpan({ cls: "codex-agent-chip-label", text: normalized.label });
     const remove = chipEl.createEl("button", {
       text: "×",
       attr: {
         type: "button",
-        "aria-label": `Remove ${chip.label}`
+        "aria-label": `Remove ${normalized.label}`
       }
     });
     remove.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this.contextChips = this.contextChips.filter((item) => item.id !== chip.id);
+      this.contextChips = this.contextChips.filter((item) => item.id !== normalized.id);
       chipEl.remove();
       this.updatePromptEmptyState();
     });
     return chipEl;
+  }
+
+  private normalizeContextChip(chip: ContextChip): ContextChip {
+    const normalizedPath = this.normalizeVaultRelativePath(chip.path);
+    const detail = normalizedPath && (!chip.detail || chip.detail === chip.path)
+      ? normalizedPath
+      : chip.detail;
+    return {
+      ...chip,
+      detail,
+      path: normalizedPath
+    };
+  }
+
+  private normalizeVaultRelativePath(filePath: string | undefined) {
+    const rawPath = filePath?.trim();
+    if (!rawPath) {
+      return undefined;
+    }
+    const vaultPath = this.getVaultBasePath();
+    const normalizedRaw = rawPath.replace(/\\/g, "/");
+    if (vaultPath && path.isAbsolute(rawPath)) {
+      const relative = path.relative(vaultPath, rawPath);
+      if (!relative) {
+        return "/";
+      }
+      if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+        return relative.replace(/\\/g, "/");
+      }
+    }
+    if (vaultPath) {
+      const normalizedVault = vaultPath.replace(/\\/g, "/").replace(/\/+$/, "");
+      const shadowAbsolute = normalizedVault.replace(/^\/+/, "");
+      if (normalizedRaw === shadowAbsolute || normalizedRaw.startsWith(`${shadowAbsolute}/`)) {
+        const relative = normalizedRaw.slice(shadowAbsolute.length).replace(/^\/+/, "");
+        return relative || "/";
+      }
+    }
+    return normalizedRaw.replace(/^\.\//, "");
   }
 
   private getContextChipIcon(chip: Pick<ContextChip, "kind" | "path" | "label">) {
@@ -3647,6 +5782,52 @@ class CodexAgentView extends ItemView {
     selection?.removeAllRanges();
     selection?.addRange(range);
     this.promptInput.focus();
+  }
+
+  private insertPromptText(text: string) {
+    if (!this.promptInput) {
+      return;
+    }
+    const hasPromptContent = this.stripPromptControlText(this.promptInput.innerText).trim().length > 0
+      || Boolean(this.promptInput.querySelector(".codex-agent-chip"));
+    if (!hasPromptContent) {
+      this.promptInput.empty();
+      this.promptInput.appendChild(document.createTextNode(text));
+    } else {
+      this.promptInput.appendChild(document.createTextNode(`\n${text}`));
+    }
+    this.updatePromptEmptyState();
+    this.promptInput.focus();
+
+    const range = document.createRange();
+    range.selectNodeContents(this.promptInput);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  private startPromptInNewAgent(prompt: string, notice: string) {
+    if (!this.promptInput) {
+      return;
+    }
+    if (this.runningProcess) {
+      new Notice("Codex is already running. Wait for the current Agent task to finish first.");
+      return;
+    }
+    const session = this.createSession();
+    this.sessions = [...this.sessions, session];
+    this.activeSessionId = session.id;
+    this.mode = "agent";
+    this.closeGitDiffPanel();
+    this.clearComposer();
+    this.renderSessionTabs();
+    this.renderTimelineItems();
+    this.renderTokenUsage();
+    this.updateComposerControls();
+    this.insertPromptText(prompt);
+    new Notice(notice);
+    void this.runCodex();
   }
 
   private normalizePromptLeadingChipLayout() {
@@ -3762,8 +5943,9 @@ class CodexAgentView extends ItemView {
         path: part.chip.path,
         text: part.chip.text
       };
-      pastedChips.push(chip);
-      fragment.appendChild(this.createPromptChipElement(chip));
+      const normalized = this.normalizeContextChip(chip);
+      pastedChips.push(normalized);
+      fragment.appendChild(this.createPromptChipElement(normalized));
     });
     const after = document.createTextNode("\u200B");
     fragment.appendChild(after);
@@ -3835,7 +6017,7 @@ class CodexAgentView extends ItemView {
               kind: part.chip.kind as ContextChip["kind"],
               label: part.chip.label,
               detail: typeof part.chip.detail === "string" ? part.chip.detail : "",
-              path: typeof part.chip.path === "string" ? part.chip.path : undefined,
+              path: this.normalizeVaultRelativePath(typeof part.chip.path === "string" ? part.chip.path : undefined),
               text: typeof part.chip.text === "string" ? part.chip.text : undefined
             }
           };
@@ -4310,6 +6492,7 @@ class CodexAgentView extends ItemView {
       this.updateRunButtonDisabledState();
       return;
     }
+    this.finalizePreviousDiffReviewForNextTurn();
     const messageParts = this.getPromptMessageParts();
     const payload = await this.buildCodexPayload(prompt);
     const attached = payload.context.length;
@@ -4479,7 +6662,7 @@ class CodexAgentView extends ItemView {
           kind: normalizedKind ?? "file",
           label: chip?.label ?? label ?? "Context",
           detail: chip?.detail ?? element.getAttribute("data-context-detail") ?? "",
-          path: chip?.path ?? element.getAttribute("data-context-path") ?? undefined,
+          path: this.normalizeVaultRelativePath(chip?.path ?? element.getAttribute("data-context-path") ?? undefined),
           text: chip?.text ?? element.getAttribute("data-context-text") ?? undefined
         }
       });
@@ -4548,11 +6731,12 @@ class CodexAgentView extends ItemView {
         ...this.contextChips
       ]
       : this.contextChips;
+    const normalizedChips = chips.map((chip) => this.normalizeContextChip(chip));
     return {
       prompt,
-      context: await Promise.all(chips.map(async (chip) => {
+      context: await Promise.all(normalizedChips.map(async (chip) => {
         if (chip.kind === "file" && chip.path) {
-          const file = this.app.vault.getAbstractFileByPath(chip.path);
+          const file = this.getVaultItemByPath(chip.path);
           const text = file instanceof TFile ? await this.app.vault.cachedRead(file) : undefined;
           return {
             id: chip.id,
@@ -4564,7 +6748,7 @@ class CodexAgentView extends ItemView {
         }
 
         if (chip.kind === "folder" && chip.path) {
-          const folder = this.app.vault.getAbstractFileByPath(chip.path);
+          const folder = this.getVaultItemByPath(chip.path);
           return {
             id: chip.id,
             kind: chip.kind,
@@ -4601,6 +6785,14 @@ class CodexAgentView extends ItemView {
         };
       }))
     };
+  }
+
+  private getVaultItemByPath(filePath: string) {
+    const normalized = this.normalizeVaultRelativePath(filePath);
+    if (!normalized || normalized === "/") {
+      return this.app.vault.getRoot();
+    }
+    return this.app.vault.getAbstractFileByPath(normalized);
   }
 
   private truncateText(text: string | undefined, maxLength: number) {
@@ -4650,10 +6842,17 @@ class CodexAgentView extends ItemView {
       ? "Agent mode: you may run necessary shell commands and edit files inside the current Obsidian vault workspace. Keep changes focused and reviewable. If you need access outside the vault, request explicit permission with a narrow reason and path instead of bypassing the sandbox."
       : "Ask mode: do not modify files and do not run shell commands; analyze only and explain proposed changes.";
     const turnModeInstructions = this.buildTurnModeInstructions();
+    const vaultPath = this.getVaultBasePath();
 
     return [
       "You are running inside an Obsidian plugin compatibility test.",
       modeInstruction,
+      "",
+      "Path handling:",
+      vaultPath ? `- Vault root is \`${vaultPath}\`.` : "- Vault root is the current working directory.",
+      "- Attached file and folder paths are vault-relative unless explicitly marked otherwise.",
+      "- If the user mentions an absolute path under the vault root, convert it to the equivalent vault-relative path before reading or writing.",
+      "- Never create a shadow directory like `Users/...` inside the vault to mirror a macOS absolute path.",
       `Mode: ${this.mode}`,
       `Sandbox: ${this.getCodexSandboxMode()}`,
       `Reasoning: ${this.reasoningLevel}`,
@@ -4673,6 +6872,22 @@ class CodexAgentView extends ItemView {
     }
     if (this.turnAuxMode === "confirm-first") {
       return "This turn: restate your understanding of the user's request, then describe your proposed approach or implementation plan at a high level, and ask for confirmation before taking implementation actions. Do not execute the task yet. After the user confirms in the next turn, proceed normally and use todo/plan when appropriate.";
+    }
+    if (this.turnAuxMode === "mirror-not-echo") {
+      return [
+        "Think with me, not for me.",
+        "",
+        "Do not flatter, appease, or agree by default.",
+        "Do not argue for sport either.",
+        "",
+        "Test my reasoning.",
+        "Challenge weak assumptions.",
+        "Name risks clearly.",
+        "Ask when context is missing.",
+        "Agree when the logic is sound.",
+        "",
+        "Help me reach the best conclusion, not the most comfortable one."
+      ].join("\n");
     }
     if (this.turnAuxMode === "deep-questions") {
       return "Deep Questions mode: interview the user deeply about the request or plan until there is shared understanding. Walk down the decision tree, resolve dependencies between decisions one by one, ask only one question at a time, and include your recommended answer with each question. If a question can be answered by inspecting the current codebase or attached context, inspect it yourself instead of asking the user. Do not rely on external or locally installed skills for this behavior.";
@@ -4785,7 +7000,7 @@ class CodexAgentView extends ItemView {
 
     if (event.type === "diff") {
       this.markActiveResponseComplete();
-      this.updateCurrentDiffStats(event.diff);
+      this.upsertDiffTimelineItem(event.diff, false);
       return;
     }
 
@@ -4804,8 +7019,6 @@ class CodexAgentView extends ItemView {
       this.markActiveResponseComplete();
       if (this.currentDiffStats) {
         this.upsertDiffTimelineItem(this.currentDiffStats.diffText, true);
-        this.currentDiffStats = null;
-        this.renderLiveDiff();
       }
     }
     this.setLiveStatus(event.state, event.title);
@@ -4992,58 +7205,110 @@ class CodexAgentView extends ItemView {
   private parseDiffStats(diffText: string) {
     const files: DiffFileView[] = [];
     let current: DiffFileView | null = null;
+    let currentHunk: DiffHunkView | null = null;
     let oldLine: number | null = null;
     let newLine: number | null = null;
 
-    const ensureFile = (path: string) => {
-      let file = files.find((entry) => entry.path === path);
-      if (!file) {
-        file = { path, added: 0, removed: 0, lines: [] };
-        files.push(file);
-      }
-      current = file;
+    const beginFile = (line: string) => {
+      const quotedMatch = line.match(/^diff --git\s+("[\s\S]*?")\s+("[\s\S]*")$/);
+      const plainMatch = line.match(/^diff --git\s+(a\/.+?)\s+(b\/.+)$/);
+      const oldRaw = quotedMatch?.[1] ?? plainMatch?.[1] ?? "";
+      const nextRaw = quotedMatch?.[2] ?? plainMatch?.[2] ?? line.replace(/^diff --git\s+/, "");
+      const oldPath = this.cleanDiffPath(oldRaw);
+      const nextPath = this.cleanDiffPath(nextRaw);
+      current = {
+        path: nextPath,
+        oldPath: oldPath || nextPath,
+        headerLines: [line],
+        added: 0,
+        removed: 0,
+        lines: [],
+        hunks: []
+      };
+      files.push(current);
+      currentHunk = null;
       oldLine = null;
       newLine = null;
     };
 
     diffText.split(/\r?\n/).forEach((line) => {
       if (line.startsWith("diff --git ")) {
-        const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-        const path = match?.[2] ?? line.replace(/^diff --git\s+/, "");
-        ensureFile(path);
-        return;
-      }
-      if (line.startsWith("+++ b/")) {
-        ensureFile(line.slice(6));
+        beginFile(line);
         return;
       }
       if (!current) {
+        return;
+      }
+      if (!currentHunk && (
+        line.startsWith("index ")
+        || line.startsWith("new file mode ")
+        || line.startsWith("deleted file mode ")
+        || line.startsWith("old mode ")
+        || line.startsWith("new mode ")
+        || line.startsWith("similarity index ")
+        || line.startsWith("rename from ")
+        || line.startsWith("rename to ")
+        || line.startsWith("--- ")
+        || line.startsWith("+++ ")
+      )) {
+        current.headerLines.push(line);
+        if (line.startsWith("+++ b/")) {
+          current.path = this.cleanDiffPath(line.slice(4));
+        } else if (line.startsWith("+++ \"b/")) {
+          current.path = this.cleanDiffPath(line.slice(4));
+        } else if (line === "+++ /dev/null") {
+          current.path = current.oldPath;
+        } else if (line.startsWith("--- a/")) {
+          current.oldPath = this.cleanDiffPath(line.slice(4));
+        } else if (line.startsWith("--- \"a/")) {
+          current.oldPath = this.cleanDiffPath(line.slice(4));
+        }
         return;
       }
       if (line.startsWith("@@")) {
         const match = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/);
         oldLine = match ? Number(match[1]) : null;
         newLine = match ? Number(match[2]) : null;
+        currentHunk = {
+          id: `${current.hunks.length + 1}:${line}`,
+          header: line,
+          added: 0,
+          removed: 0,
+          lines: [{ type: "hunk", text: line }],
+          rawLines: [line]
+        };
+        current.hunks.push(currentHunk);
         current.lines.push({ type: "hunk", text: line });
         return;
       }
-      if (oldLine === null || newLine === null || line.startsWith("+++") || line.startsWith("---") || line.startsWith("index ")) {
+      if (!currentHunk || oldLine === null || newLine === null || line.startsWith("+++") || line.startsWith("---") || line.startsWith("index ")) {
         return;
       }
+      currentHunk.rawLines.push(line);
       if (line.startsWith("+")) {
+        const diffLine: DiffLineView = { type: "add", newLine, text: line.slice(1) };
         current.added += 1;
-        current.lines.push({ type: "add", newLine, text: line.slice(1) });
+        currentHunk.added += 1;
+        current.lines.push(diffLine);
+        currentHunk.lines.push(diffLine);
         newLine += 1;
       } else if (line.startsWith("-")) {
+        const diffLine: DiffLineView = { type: "remove", oldLine, text: line.slice(1) };
         current.removed += 1;
-        current.lines.push({ type: "remove", oldLine, text: line.slice(1) });
+        currentHunk.removed += 1;
+        current.lines.push(diffLine);
+        currentHunk.lines.push(diffLine);
         oldLine += 1;
       } else if (line.startsWith(" ")) {
-        current.lines.push({ type: "context", oldLine, newLine, text: line.slice(1) });
+        const diffLine: DiffLineView = { type: "context", oldLine, newLine, text: line.slice(1) };
+        current.lines.push(diffLine);
+        currentHunk.lines.push(diffLine);
         oldLine += 1;
         newLine += 1;
       } else if (line === "\\ No newline at end of file") {
-        current.lines.push({ type: "hunk", text: line });
+        const diffLine: DiffLineView = { type: "hunk", text: line };
+        current.lines.push(diffLine);
+        currentHunk.lines.push(diffLine);
       }
     });
 
@@ -5462,6 +7727,7 @@ class CodexAgentView extends ItemView {
     this.activeResponseItemIndex = null;
     this.setRunButtonRunning(false);
     this.stopElapsedTimer();
+    void this.renderGitChanges();
     this.markActiveResponseComplete();
     this.setLiveStatus(code === 0 ? "done" : "error", code === 0 ? "Completed" : "Run failed");
     if (code !== 0) {
