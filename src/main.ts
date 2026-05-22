@@ -986,7 +986,7 @@ class AppServerAdapter implements CodexAdapter {
       approvalsReviewer: "user",
       sandbox: request.sandboxMode ?? "workspace-write",
       baseInstructions: null,
-      developerInstructions: null,
+      developerInstructions: this.buildPathSafetyInstructions(request.cwd),
       ephemeral: false
     }, (message) => {
       if (message.error) {
@@ -1401,6 +1401,72 @@ class AppServerAdapter implements CodexAdapter {
     return index > 0 ? normalized.slice(0, index) : "";
   }
 
+  private buildPathSafetyInstructions(cwd: string) {
+    const normalizedCwd = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+    const shadowRoot = normalizedCwd.replace(/^\/+/, "");
+    return [
+      "Path safety for this Obsidian vault:",
+      `- The vault root and current working directory are ${normalizedCwd || cwd}.`,
+      "- Treat vault files as cwd-relative paths unless a tool explicitly requires an absolute path.",
+      `- Never create or edit paths under ${shadowRoot}/ inside the vault; that is a shadow copy of the vault path.`,
+      "- If you see a path like Users/.../Documents/<vault>/note.md, convert it to the vault-relative suffix before reading or writing."
+    ].join("\n");
+  }
+
+  private findShadowVaultPath(value: any, cwd: string): { path: string; relativePath: string } | null {
+    const normalizedCwd = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+    const shadowRoot = normalizedCwd.replace(/^\/+/, "");
+    if (!shadowRoot) {
+      return null;
+    }
+
+    const visit = (entry: any): { path: string; relativePath: string } | null => {
+      if (typeof entry === "string") {
+        return this.matchShadowVaultPath(entry, shadowRoot);
+      }
+      if (Array.isArray(entry)) {
+        for (const item of entry) {
+          const match = visit(item);
+          if (match) {
+            return match;
+          }
+        }
+        return null;
+      }
+      if (entry && typeof entry === "object") {
+        for (const item of Object.values(entry)) {
+          const match = visit(item);
+          if (match) {
+            return match;
+          }
+        }
+      }
+      return null;
+    };
+
+    return visit(value);
+  }
+
+  private matchShadowVaultPath(value: string, shadowRoot: string): { path: string; relativePath: string } | null {
+    const normalized = value.replace(/\\/g, "/");
+    const escapedRoot = this.escapeRegExp(shadowRoot);
+    const pattern = new RegExp(`(?:^|[\\s"'\\\`=:(<>|;&])(?:\\./)?(${escapedRoot}(?:/[^\\s"'\\\`;&|<>)]*)?)`);
+    const match = normalized.match(pattern);
+    if (!match?.[1]) {
+      return null;
+    }
+
+    const shadowPath = match[1].replace(/\/+$/, "");
+    return {
+      path: shadowPath,
+      relativePath: shadowPath.slice(shadowRoot.length).replace(/^\/+/, "") || "."
+    };
+  }
+
+  private escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   private handleServerRequest(
     message: any,
     request: CodexRunRequest,
@@ -1410,6 +1476,21 @@ class AppServerAdapter implements CodexAdapter {
     const respond = (response: any) => {
       this.sendResponse(message.id, response);
     };
+    const shadowPath = this.findShadowVaultPath(params, request.cwd);
+    if (shadowPath && String(message.method).includes("requestApproval")) {
+      onEvent({
+        type: "status",
+        state: "error",
+        title: "Blocked shadow vault path",
+        detail: `Codex tried to use \`${shadowPath.path}\` inside the vault. Use vault-relative path \`${shadowPath.relativePath}\` instead.`
+      });
+      if (message.method === "item/permissions/requestApproval") {
+        this.sendResponse(message.id, { permissions: {}, scope: "turn", strictAutoReview: true });
+      } else {
+        this.sendResponse(message.id, { decision: "decline" });
+      }
+      return;
+    }
 
     if (request.approvalPolicy === "never" && String(message.method).includes("requestApproval")) {
       onEvent({
@@ -4000,7 +4081,7 @@ class CodexAgentView extends ItemView {
     }
     this.runButton.empty();
     this.runButton.toggleClass("is-running", isRunning);
-    this.runButton.disabled = isRunning ? false : !this.hasPromptText();
+    this.runButton.disabled = isRunning ? false : !this.hasPromptContent();
     this.runButton.setAttr("aria-label", isRunning ? "Stop" : "Submit");
     this.runButton.setAttr("title", isRunning ? "Stop" : "Send");
     setIcon(this.runButton, isRunning ? "square" : "send-horizontal");
@@ -6509,8 +6590,14 @@ class CodexAgentView extends ItemView {
     this.saveComposerDraftToActiveSession();
   }
 
-  private hasPromptText() {
-    return Boolean(this.promptInput && this.stripPromptControlText(this.promptInput.innerText).trim());
+  private hasPromptContent() {
+    return Boolean(
+      this.promptInput
+      && (
+        this.stripPromptControlText(this.promptInput.innerText).trim()
+        || this.promptInput.querySelector(".codex-agent-chip")
+      )
+    );
   }
 
   private updateRunButtonDisabledState() {
@@ -6538,13 +6625,13 @@ class CodexAgentView extends ItemView {
       return;
     }
 
-    const prompt = this.getPromptText();
-    if (!prompt) {
+    if (!this.hasPromptContent()) {
       this.updateRunButtonDisabledState();
       return;
     }
     this.finalizePreviousDiffReviewForNextTurn();
     const messageParts = this.getPromptMessageParts();
+    const prompt = this.getPromptText() || this.getPromptFallbackText(messageParts);
     const payload = await this.buildCodexPayload(prompt);
     const attached = payload.context.length;
     const summary = payload.context.length > 0
@@ -6728,6 +6815,19 @@ class CodexAgentView extends ItemView {
     const clone = this.promptInput.cloneNode(true) as HTMLElement;
     clone.querySelectorAll(".codex-agent-chip").forEach((node) => node.remove());
     return this.stripPromptControlText(clone.innerText).trim();
+  }
+
+  private getPromptFallbackText(parts: TimelineMessagePart[]) {
+    const chips = parts.filter((part) => part.type === "chip").map((part) => part.chip);
+    if (chips.length === 0) {
+      return "";
+    }
+
+    if (chips.every((chip) => chip.kind === "image")) {
+      return "Please respond to the attached pasted image context.";
+    }
+
+    return "Please use the attached context.";
   }
 
   private getPromptMessageParts(): TimelineMessagePart[] {
@@ -6962,6 +7062,7 @@ class CodexAgentView extends ItemView {
       "- Attached file and folder paths are vault-relative unless explicitly marked otherwise.",
       "- If the user mentions an absolute path under the vault root, convert it to the equivalent vault-relative path before reading or writing.",
       "- Never create a shadow directory like `Users/...` inside the vault to mirror a macOS absolute path.",
+      "- Example: `/Users/name/Documents/vault/folder/note.md` must be written as `folder/note.md`, not `Users/name/Documents/vault/folder/note.md`.",
       `Mode: ${this.mode}`,
       `Sandbox: ${this.getCodexSandboxMode()}`,
       `Reasoning: ${this.reasoningLevel}`,
