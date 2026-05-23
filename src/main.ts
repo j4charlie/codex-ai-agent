@@ -1,5 +1,6 @@
 import {
   Editor,
+  EditorPosition,
   editorInfoField,
   ItemView,
   MarkdownView,
@@ -17,7 +18,7 @@ import {
   WorkspaceLeaf
 } from "obsidian";
 import { StateEffect, StateField } from "@codemirror/state";
-import { Decoration, DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
 
 declare const require: any;
 declare const process: any;
@@ -46,6 +47,20 @@ const COMMON_CODEX_BINS = [
 ];
 const AGENT_ICON_ID = "message-square";
 const OPENAI_SVG_PATH = "M904.533333 435.285333c-2.730667-3.328-3.456-5.973333-2.218666-9.898666 10.197333-32.426667 13.013333-65.365333 7.466666-99.029334a220.501333 220.501333 0 0 0-83.413333-142.293333c-53.632-42.197333-115.029333-57.258667-182.741333-46.122667-6.4 1.024-10.24-0.725333-14.72-5.12-57.685333-57.301333-127.872-79.402667-207.573334-64.085333-84.522667 16.085333-142.506667 66.304-173.056 146.304-1.450667 3.669333-3.029333 5.674667-7.552 6.741333-52.309333 12.373333-95.701333 38.912-128.341333 81.194667-41.557333 54.058667-56.746667 114.773333-44.032 181.845333a216.618667 216.618667 0 0 0 50.346667 102.912c3.541333 4.096 4.138667 7.594667 2.56 12.501334-6.997333 20.565333-9.216 41.941333-9.770667 63.872 0.64 15.957333 1.706667 32.298667 5.546667 48.213333 27.178667 119.04 144.768 195.584 266.282666 173.269333 4.864-0.768 7.168 0.256 10.197334 3.413334 57.941333 58.837333 128.768 81.834667 209.706666 66.261333 84.608-16.213333 142.08-67.029333 172.885334-146.773333 1.408-3.584 2.986667-5.248 6.997333-6.186667 96.426667-21.973333 167.509333-102.826667 175.829333-200.106667 5.845333-62.592-12.757333-118.698667-54.4-166.912z m-55.210666-110.421333c3.882667 18.901333 5.12 37.802667 2.730666 56.96-0.256 2.176-0.981333 4.266667-1.578666 7.253333l-49.621334-28.245333c-43.52-24.874667-87.210667-49.493333-130.56-74.752a37.461333 37.461333 0 0 0-41.386666 0.085333c-66.304 38.357333-132.949333 75.946667-199.424 113.877334-2.133333 1.109333-3.882667 3.029333-7.253334 2.773333V318.037333c0-3.157333 2.048-4.138667 4.181334-5.418666 59.178667-33.706667 117.845333-68.437333 177.664-100.821334 97.493333-52.693333 222.976 5.76 245.248 113.066667z m-247.808 186.368c0 15.488-0.085333 30.890667 0.085333 46.293333 0 3.584-0.981333 5.717333-4.352 7.552-27.178667 15.317333-54.186667 30.805333-81.152 46.464-2.986667 1.664-5.12 1.834667-8.277333 0.085334-26.88-15.573333-54.016-31.061333-81.152-46.378667-3.541333-2.005333-4.608-4.266667-4.608-8.234667 0.170667-30.122667 0.170667-60.16 0-90.24 0-4.181333 1.237333-6.528 5.034666-8.746666 26.496-14.933333 52.906667-29.994667 79.232-45.226667 3.925333-2.176 6.741333-2.56 10.922667-0.170667 26.325333 15.317333 52.650667 30.378667 79.146667 45.312 3.712 2.133333 5.205333 4.394667 5.205333 8.661334-0.256 14.805333-0.085333 29.781333-0.085333 44.629333zM293.802667 294.4c0.085333-84.608 54.784-152.618667 138.709333-169.258667 51.584-10.026667 98.730667 2.986667 141.354667 36.053334l-69.12 39.253333c-38.314667 21.76-76.586667 43.733333-115.029334 65.322667a32 32 0 0 0-17.578666 30.464v236.970666c-2.645333 0.725333-4.138667-1.237333-5.930667-2.176-22.186667-12.501333-44.202667-25.386667-66.474667-37.632-4.608-2.56-5.930667-5.546667-5.930666-10.496 0.085333-62.848 0-125.653333 0-188.501333z m-169.514667 163.882667c-8.362667-72.96 37.290667-147.2 106.666667-172.8 1.152-0.341333 2.304-0.64 3.925333-0.981334V336.213333c0 51.626667 0.170667 103.253333 0 154.88-0.170667 15.146667 5.930667 25.6 19.413333 33.194667 67.072 37.717333 133.973333 76.032 200.832 114.090667l6.442667 3.84-74.24 42.453333c-2.56 1.493333-4.522667 2.133333-7.466667 0.341333-59.989333-34.389333-120.789333-67.2-179.626666-103.168-45.653333-27.818667-70.016-70.613333-75.946667-123.562666z m74.965333 297.898666a166.229333 166.229333 0 0 1-25.344-121.130666l11.776 6.4c56.917333 32.469333 113.92 64.938667 170.794667 97.578666a33.962667 33.962667 0 0 0 36.693333 0c67.797333-38.784 135.68-77.44 203.477334-116.053333l5.034666-2.773333c0 29.141333 0 57.130667 0.170667 85.12 0 3.413333-1.664 4.821333-4.138667 6.229333-58.581333 33.152-116.565333 67.413333-175.829333 99.413333-77.397333 41.472-173.994667 17.664-222.634667-54.784z m530.346667-12.074666c-1.706667 60.458667-41.045333 120.149333-107.776 146.346666a172.373333 172.373333 0 0 1-170.666667-28.032l80.426667-45.781333c34.218667-19.498667 68.352-39.210667 102.741333-58.368a31.274667 31.274667 0 0 0 17.536-30.165333c-0.256-76.672-0.085333-153.344-0.085333-230.144 0-8.405333 0-8.405333 7.168-4.48 22.058667 12.586667 44.16 25.301333 66.304 37.717333 3.541333 2.005333 4.949333 4.010667 4.864 8.106667-0.085333 68.181333 1.322667 136.533333-0.512 204.8z m68.266667-7.68c-8.832 3.754667-8.832 3.754667-8.832-5.632 0-66.56-0.256-133.162667 0.213333-199.68a32.426667 32.426667 0 0 0-18.261333-31.317334c-66.218667-37.461333-132.266667-75.264-198.357334-112.896l-10.112-5.888 75.178667-42.752c2.645333-1.578667 4.522667-0.725333 6.826667 0.512 59.349333 33.962667 119.381333 66.688 177.834666 101.76 44.672 26.965333 69.973333 67.84 76.928 119.168A167.125333 167.125333 0 0 1 797.866667 736.426667z";
+const INLINE_EDIT_DEFAULT_COMMANDS = {
+  polish: {
+    zhName: "润色",
+    enName: "Polish",
+    zhPrompt: "润色选中内容，使表达更清晰自然，保留原意和 Markdown 结构。",
+    enPrompt: "Polish the selected content for clarity and natural flow while preserving the original meaning and Markdown structure."
+  },
+  summarize: {
+    zhName: "总结",
+    enName: "Summarize",
+    zhPrompt: "总结选中内容，压缩为简洁要点，保留关键信息。",
+    enPrompt: "Summarize the selected content into concise points while preserving the key information."
+  }
+};
 const DEFAULT_SETTINGS: AgentPluginSettings = {
   codexBin: DEFAULT_CODEX_BIN,
   nodeBin: "",
@@ -68,7 +83,11 @@ const DEFAULT_SETTINGS: AgentPluginSettings = {
   language: "en",
   pastedImageBehavior: "chip",
   chatViewLocation: "right-pane",
-  chatFontSize: 15
+  chatFontSize: 15,
+  inlineEditQuickCommands: [
+    { id: "polish", name: INLINE_EDIT_DEFAULT_COMMANDS.polish.enName, prompt: INLINE_EDIT_DEFAULT_COMMANDS.polish.enPrompt },
+    { id: "summarize", name: INLINE_EDIT_DEFAULT_COMMANDS.summarize.enName, prompt: INLINE_EDIT_DEFAULT_COMMANDS.summarize.enPrompt }
+  ]
 };
 const BUILTIN_CODEX_SKILLS: SkillDefinition[] = [
   { name: "frontend-design", description: "Design and implement high-quality frontend interfaces, components, and interactions." },
@@ -106,6 +125,13 @@ type AppLanguage = "zh" | "en";
 type TurnAuxMode = "auto" | "plan" | "confirm-first" | "mirror-not-echo" | "deep-questions";
 type GitReviewSection = "review" | "stage" | "commit" | "history";
 type DiffReviewFilter = "active" | "accepted" | "rejected" | "all";
+type InlineEditConversationMode = "current" | "new";
+
+interface InlineEditQuickCommand {
+  id: string;
+  name: string;
+  prompt: string;
+}
 
 interface AgentPluginSettings {
   codexBin: string;
@@ -130,6 +156,7 @@ interface AgentPluginSettings {
   pastedImageBehavior: "chip";
   chatViewLocation: ChatViewLocation;
   chatFontSize: number;
+  inlineEditQuickCommands: InlineEditQuickCommand[];
 }
 
 interface ContextChip {
@@ -209,7 +236,104 @@ interface InlineDiffAction {
   lineKey?: string;
 }
 
+type InlineEditStatus = "idle" | "running" | "result" | "error";
+
+interface InlineEditSnapshot {
+  id: string;
+  filePath: string;
+  from: number;
+  to: number;
+  originalText: string;
+  request: string;
+  resultText: string;
+  status: InlineEditStatus;
+  statusTitle: string;
+  isTableMode: boolean;
+  tableEditRange?: TableEditRange;
+  conversationMode: InlineEditConversationMode;
+  quickCommands: InlineEditQuickCommand[];
+  language: AppLanguage;
+}
+
+interface TableEditRange {
+  startRow: number;
+  endRow: number;
+  startCol: number;
+  endCol: number;
+  totalRows: number;
+  totalCols: number;
+}
+
+interface RenderedTableSelection {
+  text: string;
+  selectionText: string;
+  sourceSelectionText: string;
+  index: number;
+  table?: HTMLTableElement;
+  sourceStartLine?: number;
+  sourceEndLine?: number;
+  editorTableRange?: { from: EditorPosition; to: EditorPosition };
+  sourceLine?: number;
+  editRange?: TableEditRange;
+  rect?: DOMRect;
+  rows: string[][];
+  selectedTexts: string[];
+  selectedCellCoordinates?: Array<{ row: number; col: number }>;
+}
+
+interface RenderedTablePointerCell {
+  filePath?: string;
+  table: HTMLTableElement;
+  row: number;
+  col: number;
+  time: number;
+}
+
+interface InlineEditSelectionState {
+  id: string;
+  editor: Editor;
+  view: MarkdownView;
+  file: TFile | null;
+  from: EditorPosition;
+  to: EditorPosition;
+  originalText: string;
+  beforeContext: string;
+  afterContext: string;
+  request: string;
+  resultText: string;
+  status: InlineEditStatus;
+  statusTitle: string;
+  isTableMode: boolean;
+  tableEditRange?: TableEditRange;
+  conversationMode: InlineEditConversationMode;
+  quickCommands: InlineEditQuickCommand[];
+  conversationRun?: InlineEditConversationRun;
+  previousMode: "source" | "preview";
+  previousSource: boolean;
+  previousScrollTop: number;
+}
+
+interface InlineEditConversationRun {
+  threadId?: string;
+  onEvent(event: AgentEvent): void;
+  onThread(threadId: string): void;
+  onStatus(title: string): void;
+  onDelta(delta: string): void;
+  onMessage(markdown: string): void;
+  onComplete(): void;
+  onError(title: string, message: string): void;
+}
+
 let activeInlineDiffReviewController: { handleInlineDiffAction(action: InlineDiffAction): void } | null = null;
+let activeInlineEditController: {
+  handleInlineEditSubmit(id: string, request: string): void;
+  handleInlineEditStop(id: string): void;
+  handleInlineEditApply(id: string): void;
+  handleInlineEditReject(id: string): void;
+  handleInlineEditClose(id: string): void;
+  handleInlineEditConversationMode(id: string, mode: InlineEditConversationMode): void;
+  handleInlineEditQuickCommand(id: string, commandId: string): void;
+} | null = null;
 
 const setInlineDiffReviewEffect = StateEffect.define<InlineDiffReviewSnapshot | null>();
 const inlineDiffReviewField = StateField.define<InlineDiffReviewSnapshot | null>({
@@ -233,6 +357,325 @@ const inlineDiffReviewDecorations = EditorView.decorations.compute([inlineDiffRe
 });
 
 const inlineDiffReviewExtension = [inlineDiffReviewField, inlineDiffReviewDecorations];
+
+const setInlineEditEffect = StateEffect.define<InlineEditSnapshot | null>();
+const inlineEditField = StateField.define<InlineEditSnapshot | null>({
+  create: () => null,
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setInlineEditEffect)) {
+        return effect.value;
+      }
+    }
+    if (!value || !transaction.docChanged) {
+      return value;
+    }
+    return {
+      ...value,
+      from: transaction.changes.mapPos(value.from, -1),
+      to: transaction.changes.mapPos(value.to, 1)
+    };
+  }
+});
+
+const inlineEditDecorations = EditorView.decorations.compute([inlineEditField], (state) => {
+  const snapshot = state.field(inlineEditField, false);
+  if (!snapshot) {
+    return Decoration.none;
+  }
+  const info = state.field(editorInfoField, false);
+  if (info?.file?.path !== snapshot.filePath) {
+    return Decoration.none;
+  }
+  const ranges: any[] = [];
+  if (snapshot.status === "result" && !snapshot.isTableMode) {
+    ranges.push(Decoration.mark({ class: "codex-agent-inline-edit-delete" }).range(snapshot.from, snapshot.to));
+    ranges.push(Decoration.widget({
+      widget: new InlineEditReplacementWidget(snapshot),
+      block: false,
+      side: 1
+    }).range(snapshot.to));
+    ranges.push(Decoration.widget({
+      widget: new InlineEditActionsWidget(snapshot),
+      block: false,
+      side: 2
+    }).range(snapshot.to));
+  } else {
+    ranges.push(Decoration.mark({ class: "codex-agent-inline-edit-selection" }).range(snapshot.from, snapshot.to));
+    ranges.push(Decoration.widget({
+      widget: new InlineEditWidget(snapshot),
+      block: true,
+      side: 1
+    }).range(snapshot.to));
+  }
+  return Decoration.set(ranges, true);
+});
+
+const inlineEditExtension = [inlineEditField, inlineEditDecorations];
+
+function inlineEditTr(language: AppLanguage, zh: string, en: string) {
+  return language === "zh" ? zh : en;
+}
+
+class InlineEditReplacementWidget extends WidgetType {
+  constructor(private snapshot: InlineEditSnapshot) {
+    super();
+  }
+
+  eq(other: WidgetType) {
+    return other instanceof InlineEditReplacementWidget
+      && other.snapshot.id === this.snapshot.id
+      && other.snapshot.resultText === this.snapshot.resultText;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "codex-agent-inline-edit-inserted";
+    span.textContent = this.snapshot.resultText || " ";
+    return span;
+  }
+}
+
+class InlineEditActionsWidget extends WidgetType {
+  constructor(private snapshot: InlineEditSnapshot) {
+    super();
+  }
+
+  eq(other: WidgetType) {
+    return other instanceof InlineEditActionsWidget && other.snapshot.id === this.snapshot.id;
+  }
+
+  toDOM() {
+    const actions = document.createElement("span");
+    actions.className = "codex-agent-inline-edit-overlay-actions";
+    actions.appendChild(this.createButton("×", "reject", false, inlineEditTr(this.snapshot.language, "拒绝修改", "Reject change")));
+    actions.appendChild(this.createButton("✓", "apply", true, inlineEditTr(this.snapshot.language, "应用修改", "Apply change")));
+    return actions;
+  }
+
+  private createButton(label: string, action: "apply" | "reject", primary = false, title = "") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `codex-agent-inline-edit-action ${primary ? "is-primary" : ""}`;
+    button.textContent = label;
+    if (title) {
+      button.title = title;
+      button.setAttr("aria-label", title);
+    }
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "apply") {
+        activeInlineEditController?.handleInlineEditApply(this.snapshot.id);
+      } else {
+        activeInlineEditController?.handleInlineEditReject(this.snapshot.id);
+      }
+    });
+    return button;
+  }
+}
+
+class InlineEditWidget extends WidgetType {
+  constructor(private snapshot: InlineEditSnapshot) {
+    super();
+  }
+
+  eq(other: WidgetType) {
+    return other instanceof InlineEditWidget
+      && other.snapshot.id === this.snapshot.id
+      && other.snapshot.status === this.snapshot.status
+      && other.snapshot.statusTitle === this.snapshot.statusTitle
+      && other.snapshot.request === this.snapshot.request
+      && other.snapshot.resultText === this.snapshot.resultText
+      && other.snapshot.conversationMode === this.snapshot.conversationMode
+      && other.snapshot.quickCommands.length === this.snapshot.quickCommands.length
+      && other.snapshot.language === this.snapshot.language;
+  }
+
+  toDOM() {
+    const wrap = document.createElement("div");
+    wrap.className = this.snapshot.status === "result"
+      ? "codex-agent-inline-edit-result"
+      : `codex-agent-inline-edit-widget is-${this.snapshot.status}`;
+    if (this.snapshot.status === "result") {
+      this.renderDiff(wrap);
+      return wrap;
+    }
+    this.renderPrompt(wrap);
+    return wrap;
+  }
+
+  private renderPrompt(parent: HTMLElement) {
+    const t = (zh: string, en: string) => inlineEditTr(this.snapshot.language, zh, en);
+    const header = parent.createDiv("codex-agent-inline-edit-header");
+    const title = header.createDiv("codex-agent-inline-edit-title");
+    setIcon(title.createSpan("codex-agent-inline-edit-title-icon"), "wand-sparkles");
+    title.createSpan({ text: t("让 Codex 修改选中内容", "Edit selection with Codex") });
+    title.createSpan({
+      cls: "codex-agent-inline-edit-subtitle",
+      text: this.snapshot.isTableMode ? t("Markdown 表格源码", "Markdown table source") : t("仅修改当前选区", "Current selection only")
+    });
+    if (this.snapshot.tableEditRange) {
+      title.createSpan({ cls: "codex-agent-inline-edit-subtitle", text: formatTableEditRange(this.snapshot.tableEditRange, this.snapshot.language) });
+    }
+    const close = header.createEl("button", { cls: "codex-agent-inline-edit-ghost", text: t("关闭", "Close"), attr: { type: "button" } });
+    close.addEventListener("mousedown", (event) => event.preventDefault());
+    close.addEventListener("click", () => activeInlineEditController?.handleInlineEditClose(this.snapshot.id));
+
+    const body = parent.createDiv("codex-agent-inline-edit-body");
+    let input: HTMLTextAreaElement | null = null;
+    if (this.snapshot.status === "running") {
+      body.createDiv({
+        cls: "codex-agent-inline-edit-request-text",
+        text: this.snapshot.request || " "
+      });
+    } else {
+      input = body.createEl("textarea", {
+        cls: "codex-agent-inline-edit-input",
+        attr: {
+          rows: "2",
+          placeholder: t("输入修改要求...", "Describe the edit...")
+        }
+      });
+      input.value = this.snapshot.request;
+      input.addEventListener("mousedown", (event) => event.stopPropagation());
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          activeInlineEditController?.handleInlineEditSubmit(this.snapshot.id, input?.value ?? "");
+        }
+      });
+      window.setTimeout(() => {
+        if (this.snapshot.status === "idle") {
+          input?.focus();
+        }
+      }, 0);
+    }
+
+    const footer = parent.createDiv("codex-agent-inline-edit-footer");
+    const meta = footer.createEl("button", { cls: "codex-agent-inline-edit-meta", attr: { type: "button" } });
+    meta.createSpan({ text: this.snapshot.conversationMode === "current" ? t("当前对话", "Current chat") : t("新对话", "New chat") });
+    setIcon(meta.createSpan("codex-agent-inline-edit-caret"), "chevron-down");
+    meta.disabled = this.snapshot.status === "running";
+    meta.addEventListener("mousedown", (event) => event.preventDefault());
+    meta.addEventListener("click", (event) => this.openConversationMenu(event));
+    const shortcuts = footer.createEl("button", { cls: "codex-agent-inline-edit-meta", attr: { type: "button" } });
+    shortcuts.createSpan({ text: this.snapshot.quickCommands.length > 0 ? t("快捷指令", "Quick commands") : t("快捷指令：无", "No quick commands") });
+    setIcon(shortcuts.createSpan("codex-agent-inline-edit-caret"), "chevron-down");
+    shortcuts.disabled = this.snapshot.quickCommands.length === 0 || this.snapshot.status === "running";
+    shortcuts.addEventListener("mousedown", (event) => event.preventDefault());
+    shortcuts.addEventListener("click", (event) => this.openQuickCommandMenu(event));
+    const spacer = footer.createDiv("codex-agent-inline-edit-spacer");
+    if (this.snapshot.status === "running") {
+      footer.createSpan({ cls: "codex-agent-inline-edit-status", text: this.snapshot.statusTitle || t("思考中", "Thinking") });
+      const stop = footer.createEl("button", { cls: "codex-agent-inline-edit-action", text: t("停止", "Stop"), attr: { type: "button" } });
+      stop.addEventListener("mousedown", (event) => event.preventDefault());
+      stop.addEventListener("click", () => activeInlineEditController?.handleInlineEditStop(this.snapshot.id));
+      return;
+    }
+    if (this.snapshot.status === "error") {
+      footer.createSpan({ cls: "codex-agent-inline-edit-status is-error", text: this.snapshot.statusTitle || t("失败", "Failed") });
+    }
+    const send = footer.createEl("button", { cls: "codex-agent-inline-edit-send", text: t("发送", "Send"), attr: { type: "button" } });
+    send.addEventListener("mousedown", (event) => event.preventDefault());
+    send.addEventListener("click", () => activeInlineEditController?.handleInlineEditSubmit(this.snapshot.id, input?.value ?? ""));
+    spacer.empty();
+  }
+
+  private openConversationMenu(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    menu.addItem((item) => item
+      .setTitle(inlineEditTr(this.snapshot.language, "在当前对话中修改", "Edit in current chat"))
+      .setIcon(this.snapshot.conversationMode === "current" ? "check" : "message-square")
+      .onClick(() => activeInlineEditController?.handleInlineEditConversationMode(this.snapshot.id, "current")));
+    menu.addItem((item) => item
+      .setTitle(inlineEditTr(this.snapshot.language, "在新对话中修改", "Edit in new chat"))
+      .setIcon(this.snapshot.conversationMode === "new" ? "check" : "message-square-plus")
+      .onClick(() => activeInlineEditController?.handleInlineEditConversationMode(this.snapshot.id, "new")));
+    menu.showAtMouseEvent(event);
+  }
+
+  private openQuickCommandMenu(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = new Menu();
+    if (this.snapshot.quickCommands.length === 0) {
+      menu.addItem((item) => item.setTitle(inlineEditTr(this.snapshot.language, "当前没有快捷指令，请在设置中创建", "No quick commands yet. Create one in settings.")).setDisabled(true));
+    } else {
+      this.snapshot.quickCommands.forEach((command) => {
+        menu.addItem((item) => item
+          .setTitle(command.name)
+          .setIcon("sparkles")
+          .onClick(() => activeInlineEditController?.handleInlineEditQuickCommand(this.snapshot.id, command.id)));
+      });
+    }
+    menu.showAtMouseEvent(event);
+  }
+
+  private renderDiff(parent: HTMLElement) {
+    const lines = parent.createDiv("codex-agent-inline-edit-diff-lines");
+    buildSimpleLineDiff(this.snapshot.originalText, this.snapshot.resultText).forEach((line) => {
+      const row = lines.createDiv(`codex-agent-inline-edit-diff-line is-${line.type}`);
+      row.createSpan({ cls: "codex-agent-inline-edit-diff-marker", text: line.type === "add" ? "+" : line.type === "remove" ? "-" : " " });
+      row.createSpan({ cls: "codex-agent-inline-edit-diff-code", text: line.text || " " });
+    });
+    const actions = parent.createDiv("codex-agent-inline-edit-inline-actions");
+    actions.appendChild(this.createDiffButton("×", "reject", false, inlineEditTr(this.snapshot.language, "拒绝修改", "Reject change")));
+    actions.appendChild(this.createDiffButton("✓", "apply", true, inlineEditTr(this.snapshot.language, "应用修改", "Apply change")));
+  }
+
+  private createDiffButton(label: string, action: "apply" | "reject", primary = false, title = "") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `codex-agent-inline-edit-action ${primary ? "is-primary" : ""}`;
+    button.textContent = label;
+    if (title) {
+      button.title = title;
+      button.setAttr("aria-label", title);
+    }
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => {
+      if (action === "apply") {
+        activeInlineEditController?.handleInlineEditApply(this.snapshot.id);
+      } else {
+        activeInlineEditController?.handleInlineEditReject(this.snapshot.id);
+      }
+    });
+    return button;
+  }
+}
+
+function buildSimpleLineDiff(original: string, replacement: string): Array<{ type: "context" | "add" | "remove"; text: string }> {
+  const oldLines = original.split(/\r?\n/);
+  const newLines = replacement.split(/\r?\n/);
+  const prefix: Array<{ type: "context"; text: string }> = [];
+  while (oldLines.length && newLines.length && oldLines[0] === newLines[0]) {
+    prefix.push({ type: "context", text: oldLines.shift() ?? "" });
+  }
+  const suffix: Array<{ type: "context"; text: string }> = [];
+  while (oldLines.length && newLines.length && oldLines[oldLines.length - 1] === newLines[newLines.length - 1]) {
+    suffix.unshift({ type: "context", text: oldLines.pop() ?? "" });
+    newLines.pop();
+  }
+  return [
+    ...prefix,
+    ...oldLines.map((text) => ({ type: "remove" as const, text })),
+    ...newLines.map((text) => ({ type: "add" as const, text })),
+    ...suffix
+  ];
+}
+
+function formatTableEditRange(range: TableEditRange, language: AppLanguage = "zh") {
+  return inlineEditTr(
+    language,
+    `修改范围：第 ${range.startRow + 1}-${range.endRow + 1} 行，第 ${range.startCol + 1}-${range.endCol + 1} 列`,
+    `Edit scope: rows ${range.startRow + 1}-${range.endRow + 1}, columns ${range.startCol + 1}-${range.endCol + 1}`
+  );
+}
 
 class InlineDiffHunkWidget extends WidgetType {
   constructor(
@@ -1675,6 +2118,12 @@ class PtyCodexAdapter implements CodexAdapter {
 
 export default class CodexForObsidianPlugin extends Plugin {
   private selectionButtonEl: HTMLElement | null = null;
+  private inlineEditState: InlineEditSelectionState | null = null;
+  private inlineEditEditorView: EditorView | null = null;
+  private inlineEditHandle: AgentRunHandle | null = null;
+  private inlineEditRunId = 0;
+  private renderedTableDragStart: RenderedTablePointerCell | null = null;
+  private renderedTableDragEnd: RenderedTablePointerCell | null = null;
   private availableSkills: SkillDefinition[] = [...BUILTIN_CODEX_SKILLS];
   private agentData: AgentPluginData = {
     sessions: [],
@@ -1698,6 +2147,11 @@ export default class CodexForObsidianPlugin extends Plugin {
     this.availableSkills = this.loadAvailableSkills();
     this.addSettingTab(new CodexAgentSettingTab(this.app, this));
     this.registerEditorExtension(inlineDiffReviewExtension);
+    this.registerEditorExtension(inlineEditExtension);
+    this.registerEditorExtension(this.createLivePreviewTableMarkerExtension());
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      void this.markRenderedTables(el, ctx);
+    });
 
     this.registerView(
       VIEW_TYPE_CODEX_AGENT,
@@ -1740,11 +2194,19 @@ export default class CodexForObsidianPlugin extends Plugin {
 
         menu.addItem((item) => {
           item
-            .setTitle("Add to Agent")
+            .setTitle(this.tr("加入 Codex 对话", "Add to Codex conversation"))
             .setIcon("message-square-plus")
             .onClick(async () => {
               const agentView = await this.activateView();
               agentView?.addSelectionContext(selection, view.file);
+            });
+        });
+        menu.addItem((item) => {
+          item
+            .setTitle(this.tr("用 Codex 修改选中内容", "Edit selection with Codex"))
+            .setIcon("wand-sparkles")
+            .onClick(() => {
+              void this.openInlineEditForEditorSelection(editor, view);
             });
         });
       })
@@ -1758,7 +2220,7 @@ export default class CodexForObsidianPlugin extends Plugin {
         if (file instanceof TFile) {
           menu.addItem((item) => {
             item
-              .setTitle("Add file to Agent")
+              .setTitle(this.tr("添加文件到Codex对话", "Add file to Codex conversation"))
               .setIcon("file-plus")
               .onClick(async () => {
                 const view = await this.activateView();
@@ -1771,7 +2233,7 @@ export default class CodexForObsidianPlugin extends Plugin {
         if (file instanceof TFolder) {
           menu.addItem((item) => {
             item
-              .setTitle("Add folder to Agent")
+              .setTitle(this.tr("添加文件夹到Codex对话", "Add folder to Codex conversation"))
               .setIcon("folder-plus")
               .onClick(async () => {
                 const view = await this.activateView();
@@ -1782,18 +2244,44 @@ export default class CodexForObsidianPlugin extends Plugin {
       })
     );
 
-    this.registerDomEvent(document, "mouseup", () => {
+    this.registerDomEvent(document, "mousedown", (event: MouseEvent) => {
+      this.renderedTableDragStart = this.getRenderedTablePointerCell(event);
+      this.renderedTableDragEnd = null;
+    });
+
+    this.registerDomEvent(document, "mouseup", (event: MouseEvent) => {
+      this.renderedTableDragEnd = this.getRenderedTablePointerCell(event);
       window.setTimeout(() => this.showSelectionAddButton(), 0);
     });
 
-    this.registerDomEvent(document, "keydown", () => {
+    this.registerDomEvent(document, "keydown", (event: KeyboardEvent) => {
+      if (event.key === "Escape" && this.inlineEditState) {
+        this.closeInlineEdit();
+        return;
+      }
       this.hideSelectionAddButton();
     });
   }
 
   async onunload() {
     this.hideSelectionAddButton();
+    this.closeInlineEdit();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CODEX_AGENT);
+  }
+
+  private createLivePreviewTableMarkerExtension() {
+    const owner = this;
+    return ViewPlugin.fromClass(class {
+      constructor(private view: EditorView) {
+        owner.markLivePreviewTablesInEditorView(this.view);
+      }
+
+      update(update: ViewUpdate) {
+        if (update.docChanged || update.viewportChanged || update.geometryChanged) {
+          owner.markLivePreviewTablesInEditorView(update.view);
+        }
+      }
+    }).extension;
   }
 
   getAgentData(): AgentPluginData {
@@ -1812,6 +2300,24 @@ export default class CodexForObsidianPlugin extends Plugin {
 
   tr(zh: string, en: string) {
     return this.agentData.settings.language === "zh" ? zh : en;
+  }
+
+  localizeInlineEditQuickCommand(command: InlineEditQuickCommand, language = this.agentData.settings.language): InlineEditQuickCommand {
+    const defaults = INLINE_EDIT_DEFAULT_COMMANDS[command.id as keyof typeof INLINE_EDIT_DEFAULT_COMMANDS];
+    if (!defaults) {
+      return command;
+    }
+    const knownNames = new Set([defaults.zhName, defaults.enName]);
+    const knownPrompts = new Set([defaults.zhPrompt, defaults.enPrompt]);
+    return {
+      ...command,
+      name: knownNames.has(command.name) ? inlineEditTr(language, defaults.zhName, defaults.enName) : command.name,
+      prompt: knownPrompts.has(command.prompt) ? inlineEditTr(language, defaults.zhPrompt, defaults.enPrompt) : command.prompt
+    };
+  }
+
+  localizeInlineEditQuickCommands(commands: InlineEditQuickCommand[], language = this.agentData.settings.language) {
+    return commands.map((command) => this.localizeInlineEditQuickCommand(command, language));
   }
 
   getDiffReviewState(): DiffReviewPersistedState {
@@ -2160,6 +2666,7 @@ export default class CodexForObsidianPlugin extends Plugin {
   }
 
   private normalizeSettings(settings: any): AgentPluginSettings {
+    const language: AppLanguage = ["zh", "en"].includes(settings?.language) ? settings.language : DEFAULT_SETTINGS.language;
     return {
       codexBin: typeof settings?.codexBin === "string" && settings.codexBin.trim() ? settings.codexBin : DEFAULT_SETTINGS.codexBin,
       nodeBin: typeof settings?.nodeBin === "string" ? settings.nodeBin : DEFAULT_SETTINGS.nodeBin,
@@ -2179,11 +2686,23 @@ export default class CodexForObsidianPlugin extends Plugin {
       diffLineNumbers: typeof settings?.diffLineNumbers === "boolean" ? settings.diffLineNumbers : DEFAULT_SETTINGS.diffLineNumbers,
       enableDiffReview: typeof settings?.enableDiffReview === "boolean" ? settings.enableDiffReview : DEFAULT_SETTINGS.enableDiffReview,
       enableGitManagement: typeof settings?.enableGitManagement === "boolean" ? settings.enableGitManagement : DEFAULT_SETTINGS.enableGitManagement,
-      language: ["zh", "en"].includes(settings?.language) ? settings.language : DEFAULT_SETTINGS.language,
+      language,
       pastedImageBehavior: "chip",
       chatViewLocation: ["right-pane", "left-pane", "new-leaf"].includes(settings?.chatViewLocation) ? settings.chatViewLocation : DEFAULT_SETTINGS.chatViewLocation,
-      chatFontSize: this.normalizeRangedInteger(settings?.chatFontSize, DEFAULT_SETTINGS.chatFontSize, 13, 20)
+      chatFontSize: this.normalizeRangedInteger(settings?.chatFontSize, DEFAULT_SETTINGS.chatFontSize, 13, 20),
+      inlineEditQuickCommands: this.localizeInlineEditQuickCommands(this.normalizeInlineEditQuickCommands(settings?.inlineEditQuickCommands), language)
     };
+  }
+
+  private normalizeInlineEditQuickCommands(value: any): InlineEditQuickCommand[] {
+    const source = Array.isArray(value) ? value : DEFAULT_SETTINGS.inlineEditQuickCommands;
+    return source
+      .map((entry: any, index: number) => ({
+        id: typeof entry?.id === "string" && entry.id.trim() ? entry.id.trim() : `quick-${index}-${Date.now()}`,
+        name: typeof entry?.name === "string" ? entry.name : "",
+        prompt: typeof entry?.prompt === "string" ? entry.prompt : ""
+      }))
+      .slice(0, 20);
   }
 
   private normalizePositiveInteger(value: any, fallback: number) {
@@ -2345,20 +2864,33 @@ export default class CodexForObsidianPlugin extends Plugin {
       return;
     }
     const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-    const selection = markdownView?.editor.getSelection().trim();
+    const editorSelection = markdownView?.editor.getSelection().trim() ?? "";
+    const domSelection = document.getSelection();
+    const domSelectionInView = this.isDomSelectionInsideView(domSelection, markdownView);
+    const markdownEditorView = markdownView ? this.getCodeMirrorEditorView(markdownView.editor) : null;
+    if (markdownEditorView) {
+      this.markLivePreviewTablesInEditorView(markdownEditorView);
+    }
+    const domSelectionTable = this.getDomSelectionRenderedTable(domSelection, markdownView);
+    const domSelectionInTable = Boolean(domSelectionTable);
+    const domSelectionText = domSelectionInView ? domSelection?.toString().trim() ?? "" : "";
+    const selection = editorSelection || domSelectionText || domSelectionTable?.text || "";
 
-    if (!markdownView || !selection) {
+    if (!markdownView || (!selection && !domSelectionInTable)) {
       this.hideSelectionAddButton();
       return;
     }
-    const sourceFile = markdownView.file;
 
-    const domSelection = document.getSelection();
     if (!domSelection || domSelection.rangeCount === 0) {
       return;
     }
 
-    const rect = domSelection.getRangeAt(0).getBoundingClientRect();
+    const selectionRect = domSelection.getRangeAt(0).getBoundingClientRect();
+    const rect = this.isEmptyDomRect(selectionRect) && domSelectionTable?.rect
+      ? domSelectionTable.rect
+      : domSelectionInTable && domSelectionTable?.rect
+        ? domSelectionTable.rect
+        : selectionRect;
     if (!rect || rect.width === 0 && rect.height === 0) {
       return;
     }
@@ -2366,24 +2898,1839 @@ export default class CodexForObsidianPlugin extends Plugin {
     this.hideSelectionAddButton();
     const button = document.body.createEl("button", {
       cls: "codex-agent-selection-popover",
-      text: "Add to Agent"
+      attr: { type: "button", "aria-label": this.tr("用 Codex 修改选中内容", "Edit selection with Codex") }
     });
-    button.style.left = `${Math.max(8, rect.left + rect.width / 2 - 44)}px`;
-    button.style.top = `${Math.max(8, rect.top - 34)}px`;
+    const icon = button.createSpan("codex-agent-selection-popover-icon");
+    setIcon(icon, "sparkles");
+    button.createSpan({ cls: "codex-agent-selection-popover-label", text: this.tr("用 Codex 修改", "Edit with Codex") });
+    button.style.left = `${Math.max(8, rect.left + rect.width / 2 - 70)}px`;
+    button.style.top = `${Math.max(8, rect.top - 38)}px`;
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
     });
-    button.addEventListener("click", async () => {
-      const view = await this.activateView();
-      view?.addSelectionContext(selection, sourceFile);
+    button.addEventListener("click", () => {
+      if (domSelectionInTable) {
+        void this.openInlineEditForRenderedSelection(markdownView, domSelectionTable?.text || domSelectionText || selection, domSelectionTable ?? undefined);
+      } else if (editorSelection) {
+        void this.openInlineEditForEditorSelection(markdownView.editor, markdownView);
+      } else {
+        void this.openInlineEditForRenderedSelection(markdownView, selection);
+      }
       this.hideSelectionAddButton();
     });
     this.selectionButtonEl = button;
   }
 
+  private isDomSelectionInsideView(selection: Selection | null, view: MarkdownView | null): boolean {
+    if (!selection || !view || selection.rangeCount === 0 || selection.isCollapsed) {
+      return false;
+    }
+    const container = selection.getRangeAt(0).commonAncestorContainer;
+    return view.contentEl.contains(container.nodeType === Node.ELEMENT_NODE ? container as HTMLElement : container.parentElement);
+  }
+
+  private getDomSelectionRenderedTable(selection: Selection | null, view: MarkdownView | null): RenderedTableSelection | null {
+    if (!selection || !view || selection.rangeCount === 0) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    const nodes = [range.startContainer, range.endContainer, range.commonAncestorContainer];
+    const table = nodes.map((node) => {
+      const element = node.nodeType === Node.ELEMENT_NODE ? node as HTMLElement : node.parentElement;
+      return element?.closest("table");
+    }).find((candidate): candidate is HTMLTableElement => Boolean(candidate && view.contentEl.contains(candidate)));
+    if (!table) {
+      return null;
+    }
+    const tables = Array.from(view.contentEl.querySelectorAll("table"));
+    const tableIndex = Math.max(0, tables.indexOf(table));
+    const editorView = this.getCodeMirrorEditorView(view.editor);
+    if (editorView && (!table.hasAttribute("data-codex-source-start-line") || !table.hasAttribute("data-codex-source-end-line"))) {
+      this.markLivePreviewTableElement(editorView, table, tableIndex);
+    }
+    const selectionText = selection.toString().trim();
+    const sourceSelectionText = view.editor.getSelection().trim();
+    const dragSelectedCells = this.getRenderedTableDragSelectedCells(table, view);
+    const selectedCells = dragSelectedCells.length > 0
+      ? dragSelectedCells
+      : this.getRenderedTableSelectedCells(table, range);
+    const rect = this.getRenderedTableSelectionRect(selectedCells) ?? table.getBoundingClientRect();
+    const rows = this.getRenderedTableRows(table);
+    const editorTableRange = this.getEditorSelectionTableRange(view, rows);
+    const selectedCellCoordinates = this.getRenderedTableCellCoordinates(table, selectedCells);
+    const editorEditRange = sourceSelectionText
+      ? this.getEditorSelectionTableEditRange(view, rows)
+      : undefined;
+    const fallbackEditRange = this.getRenderedTableSelectionRange(table, selectedCells, selectionText, rows, sourceSelectionText);
+    const editRange = dragSelectedCells.length > 1
+      ? fallbackEditRange ?? editorEditRange
+      : editorEditRange ?? fallbackEditRange;
+    return {
+      text: table.innerText.trim(),
+      selectionText,
+      sourceSelectionText,
+      index: tableIndex,
+      table,
+      sourceStartLine: this.getRenderedTableSourceLineAttr(table, "data-codex-source-start-line"),
+      sourceEndLine: this.getRenderedTableSourceLineAttr(table, "data-codex-source-end-line"),
+      editorTableRange,
+      sourceLine: this.getRenderedSourceLine(table, view),
+      editRange,
+      rect,
+      rows,
+      selectedTexts: selectedCells.map((cell) => this.normalizeTableCellText(cell.innerText)),
+      selectedCellCoordinates
+    };
+  }
+
+  private getRenderedTableSourceLineAttr(table: HTMLTableElement, attr: string): number | undefined {
+    const raw = table.getAttribute(attr);
+    return raw && /^\d+$/.test(raw) ? Number(raw) : undefined;
+  }
+
+  private getRenderedTableCellCoordinates(table: HTMLTableElement, cells: HTMLTableCellElement[]) {
+    const selected = new Set(cells);
+    const coordinates: Array<{ row: number; col: number }> = [];
+    Array.from(table.rows).forEach((row, rowIndex) => {
+      Array.from(row.cells).forEach((cell, colIndex) => {
+        if (selected.has(cell as HTMLTableCellElement)) {
+          coordinates.push({ row: rowIndex, col: colIndex });
+        }
+      });
+    });
+    return coordinates;
+  }
+
+  private getRenderedTablePointerCell(event: MouseEvent): RenderedTablePointerCell | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) {
+      return null;
+    }
+    const target = event.target instanceof HTMLElement
+      ? event.target
+      : document.elementFromPoint(event.clientX, event.clientY);
+    const pointTarget = document.elementFromPoint(event.clientX, event.clientY);
+    const cell = this.findClosestRenderedTableCell(pointTarget) ?? this.findClosestRenderedTableCell(target);
+    if (!cell || !view.contentEl.contains(cell)) {
+      return null;
+    }
+    const table = cell.closest("table");
+    if (!(table instanceof HTMLTableElement) || !view.contentEl.contains(table)) {
+      return null;
+    }
+    const row = Array.from(table.rows).findIndex((entry) => Array.from(entry.cells).includes(cell));
+    const col = row >= 0 ? Array.from(table.rows[row].cells).indexOf(cell) : -1;
+    if (row < 0 || col < 0) {
+      return null;
+    }
+    return {
+      filePath: view.file?.path,
+      table,
+      row,
+      col,
+      time: Date.now()
+    };
+  }
+
+  private findClosestRenderedTableCell(target: Element | null): HTMLTableCellElement | null {
+    const cell = target?.closest("td, th");
+    return cell instanceof HTMLTableCellElement ? cell : null;
+  }
+
+  private getRenderedTableDragSelectedCells(table: HTMLTableElement, view: MarkdownView) {
+    const start = this.renderedTableDragStart;
+    const end = this.renderedTableDragEnd;
+    if (!start || !end || start.table !== table || end.table !== table) {
+      return [];
+    }
+    if (start.filePath !== view.file?.path || end.filePath !== view.file?.path || Date.now() - end.time > 5000) {
+      return [];
+    }
+    const startRow = Math.min(start.row, end.row);
+    const endRow = Math.max(start.row, end.row);
+    const startCol = Math.min(start.col, end.col);
+    const endCol = Math.max(start.col, end.col);
+    const cells: HTMLTableCellElement[] = [];
+    Array.from(table.rows).forEach((row, rowIndex) => {
+      if (rowIndex < startRow || rowIndex > endRow) {
+        return;
+      }
+      Array.from(row.cells).forEach((cell, colIndex) => {
+        if (colIndex >= startCol && colIndex <= endCol) {
+          cells.push(cell as HTMLTableCellElement);
+        }
+      });
+    });
+    return cells;
+  }
+
+  private getEditorSelectionTableRange(view: MarkdownView, renderedRows: string[][]): { from: EditorPosition; to: EditorPosition } | undefined {
+    const from = this.normalizeEditorPosition(view.editor.getCursor("from"));
+    const to = this.normalizeEditorPosition(view.editor.getCursor("to"));
+    const range = this.getMarkdownTableRange(view.editor, from, to);
+    if (!range) {
+      return undefined;
+    }
+    const sourceRows = view.editor.getRange(range.from, range.to)
+      .split(/\r?\n/)
+      .filter((line) => this.isMarkdownTableLikeLine(line))
+      .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+      .map((line) => this.splitMarkdownTableRow(line));
+    return this.tableRowsMatchSourceRows(sourceRows, renderedRows) ? range : undefined;
+  }
+
+  private async markRenderedTables(el: HTMLElement, ctx: { sourcePath: string; getSectionInfo(el: HTMLElement): { text: string; lineStart: number; lineEnd: number } | null }) {
+    const tables = Array.from(el.querySelectorAll<HTMLTableElement>("table"));
+    if (tables.length === 0 || !ctx.sourcePath) {
+      return;
+    }
+    const section = ctx.getSectionInfo(el);
+    if (!section) {
+      return;
+    }
+    const candidates = this.getMarkdownTableCandidates(section.text)
+      .map((candidate) => ({
+        ...candidate,
+        start: candidate.start + section.lineStart,
+        end: candidate.end + section.lineStart
+      }))
+      .filter((candidate) => candidate.start >= section.lineStart && candidate.end <= section.lineEnd);
+    const used = new Set<number>();
+    tables.forEach((table, tableIndex) => {
+      const renderedRows = this.getRenderedTableRows(table);
+      if (candidates[tableIndex] && !used.has(tableIndex) && this.tableRowsMatchSourceRows(candidates[tableIndex].rows, renderedRows)) {
+        used.add(tableIndex);
+        this.setRenderedTableMarkers(table, tableIndex, candidates[tableIndex].start, candidates[tableIndex].end);
+        return;
+      }
+      const best = candidates
+        .map((candidate, candidateIndex) => ({
+          candidate,
+          candidateIndex,
+          score: used.has(candidateIndex)
+            ? -Infinity
+            : this.scoreMarkdownTableCandidate(candidate, candidateIndex, {
+              text: table.innerText.trim(),
+              selectionText: "",
+              sourceSelectionText: "",
+              index: tableIndex,
+              table,
+              rows: renderedRows,
+              selectedTexts: [],
+              editRange: undefined
+            })
+        }))
+        .sort((a, b) => b.score - a.score)[0];
+      if (!best || best.score < 70) {
+        return;
+      }
+      used.add(best.candidateIndex);
+      this.setRenderedTableMarkers(table, tableIndex, best.candidate.start, best.candidate.end);
+    });
+  }
+
+  private markLivePreviewTablesInEditorView(editorView: EditorView) {
+    const tables = Array.from(editorView.dom.querySelectorAll<HTMLTableElement>("table"));
+    tables.forEach((table, tableIndex) => {
+      if (table.hasAttribute("data-codex-source-start-line") && table.hasAttribute("data-codex-source-end-line")) {
+        return;
+      }
+      this.markLivePreviewTableElement(editorView, table, tableIndex);
+    });
+  }
+
+  private markLivePreviewTableElement(editorView: EditorView, table: HTMLTableElement, tableIndex: number) {
+    const source = editorView.state.doc.toString();
+    const lines = source.split(/\r?\n/);
+    const range = this.getLivePreviewTableRange(editorView, table, lines);
+    if (!range) {
+      return false;
+    }
+    const sourceRows = lines
+      .slice(range.from.line, range.to.line + 1)
+      .filter((line) => this.isMarkdownTableLikeLine(line))
+      .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+      .map((line) => this.splitMarkdownTableRow(line));
+    if (!this.tableRowsMatchSourceRows(sourceRows, this.getRenderedTableRows(table))) {
+      return false;
+    }
+    this.setRenderedTableMarkers(table, tableIndex, range.from.line, range.to.line);
+    return true;
+  }
+
+  private getLivePreviewTableRange(editorView: EditorView, table: HTMLTableElement, lines: string[]): { from: EditorPosition; to: EditorPosition } | null {
+    const cells = Array.from(table.querySelectorAll<HTMLTableCellElement>("th, td"));
+    const domCandidates = [
+      table,
+      cells[0],
+      cells[cells.length - 1],
+      this.findFirstTextNode(cells[0] ?? table),
+      this.findFirstTextNode(cells[cells.length - 1] ?? table)
+    ].filter((node): node is Node => Boolean(node));
+    for (const node of domCandidates) {
+      try {
+        const pos = editorView.posAtDOM(node, 0);
+        const line = editorView.state.doc.lineAt(pos).number - 1;
+        if (line < 0 || line >= lines.length || !this.isMarkdownTableLikeLine(lines[line])) {
+          continue;
+        }
+        const range = this.getMarkdownTableRangeInLines(lines, line);
+        if (range) {
+          return range;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private findFirstTextNode(root: Node | null | undefined): Node | null {
+    if (!root) {
+      return null;
+    }
+    if (root.nodeType === Node.TEXT_NODE && root.textContent?.trim()) {
+      return root;
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      if (node.textContent?.trim()) {
+        return node;
+      }
+      node = walker.nextNode();
+    }
+    return null;
+  }
+
+  private setRenderedTableMarkers(table: HTMLTableElement, tableIndex: number, startLine: number, endLine: number) {
+    table.setAttribute("data-codex-table-index", String(tableIndex));
+    table.setAttribute("data-codex-source-start-line", String(startLine));
+    table.setAttribute("data-codex-source-end-line", String(endLine));
+    Array.from(table.rows).forEach((row, rowIndex) => {
+      Array.from(row.cells).forEach((cell, colIndex) => {
+        cell.setAttribute("data-codex-row", String(rowIndex));
+        cell.setAttribute("data-codex-col", String(colIndex));
+      });
+    });
+  }
+
+  private getRenderedSourceLine(element: HTMLElement, view: MarkdownView): number | undefined {
+    let cursor: HTMLElement | null = element;
+    while (cursor && cursor !== view.contentEl) {
+      const raw = cursor.getAttribute("data-line");
+      if (raw && /^\d+$/.test(raw)) {
+        return Number(raw);
+      }
+      cursor = cursor.parentElement;
+    }
+    const nearest = element.closest<HTMLElement>("[data-line]");
+    const raw = nearest && view.contentEl.contains(nearest) ? nearest.getAttribute("data-line") : null;
+    return raw && /^\d+$/.test(raw) ? Number(raw) : undefined;
+  }
+
+  private getRenderedTableSelectedCells(table: HTMLTableElement, range: Range): HTMLTableCellElement[] {
+    const rows = Array.from(table.rows);
+    if (range.collapsed) {
+      const start = range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? range.startContainer as HTMLElement
+        : range.startContainer.parentElement;
+      const cell = start?.closest("td, th");
+      return cell && table.contains(cell) ? [cell as HTMLTableCellElement] : [];
+    }
+    const selectionRects = Array.from(range.getClientRects()).filter((rect) => !this.isEmptyDomRect(rect));
+    const selected: HTMLTableCellElement[] = [];
+    rows.forEach((row, rowIndex) => {
+      Array.from(row.cells).forEach((cell, colIndex) => {
+        const selectedByRect = selectionRects.length > 0
+          && selectionRects.some((rect) => this.rectsOverlap(rect, cell.getBoundingClientRect()));
+        const selectedByRange = selectionRects.length === 0 && range.intersectsNode(cell);
+        if (selectedByRect || selectedByRange) {
+          selected.push(cell);
+        }
+      });
+    });
+    return selected;
+  }
+
+  private rectsOverlap(a: DOMRect | ClientRect, b: DOMRect | ClientRect) {
+    const tolerance = 1;
+    return a.left < b.right - tolerance
+      && a.right > b.left + tolerance
+      && a.top < b.bottom - tolerance
+      && a.bottom > b.top + tolerance;
+  }
+
+  private getRenderedTableRows(table: HTMLTableElement): string[][] {
+    return Array.from(table.rows).map((row) =>
+      Array.from(row.cells).map((cell) => this.normalizeTableCellText(cell.innerText))
+    );
+  }
+
+  private getRenderedTableSelectionRange(
+    table: HTMLTableElement,
+    cells: HTMLTableCellElement[],
+    selectionText = "",
+    renderedRows?: string[][],
+    sourceSelectionText = ""
+  ): TableEditRange | undefined {
+    const rows = Array.from(table.rows);
+    const sourceRange = renderedRows
+      ? this.getRenderedTableSelectionRangeFromSourceText(renderedRows, sourceSelectionText)
+      : undefined;
+    if (sourceRange) {
+      return sourceRange;
+    }
+    const textRange = renderedRows ? this.getRenderedTableSelectionRangeFromText(renderedRows, selectionText) : undefined;
+    if (textRange) {
+      return textRange;
+    }
+    const selected: Array<{ row: number; col: number }> = [];
+    rows.forEach((row, rowIndex) => {
+      Array.from(row.cells).forEach((cell, colIndex) => {
+        if (cells.includes(cell)) {
+          selected.push({ row: rowIndex, col: colIndex });
+        }
+      });
+    });
+    if (selected.length === 0) {
+      return undefined;
+    }
+    return {
+      startRow: Math.min(...selected.map((cell) => cell.row)),
+      endRow: Math.max(...selected.map((cell) => cell.row)),
+      startCol: Math.min(...selected.map((cell) => cell.col)),
+      endCol: Math.max(...selected.map((cell) => cell.col)),
+      totalRows: rows.length,
+      totalCols: Math.max(...rows.map((row) => row.cells.length), 0)
+    };
+  }
+
+  private getEditorSelectionTableEditRange(view: MarkdownView, renderedRows: string[][]): TableEditRange | undefined {
+    const from = this.normalizeEditorPosition(view.editor.getCursor("from"));
+    const to = this.normalizeEditorPosition(view.editor.getCursor("to"));
+    if (from.line === to.line && from.ch === to.ch) {
+      return undefined;
+    }
+    const tableRange = this.getEditorSelectionTableRange(view, renderedRows);
+    if (!tableRange) {
+      return undefined;
+    }
+    return this.getSourceTableSelectionRange(view.editor, from, to, tableRange);
+  }
+
+  private getSourceTableSelectionRange(
+    editor: Editor,
+    selectionFrom: EditorPosition,
+    selectionTo: EditorPosition,
+    tableRange: { from: EditorPosition; to: EditorPosition }
+  ): TableEditRange | undefined {
+    const from = this.compareEditorPositions(selectionFrom, selectionTo) <= 0 ? selectionFrom : selectionTo;
+    const to = from === selectionFrom ? selectionTo : selectionFrom;
+    const tableLines = editor.getRange(tableRange.from, tableRange.to).split(/\r?\n/);
+    const rows = tableLines
+      .map((line, index) => ({
+        line,
+        sourceLine: tableRange.from.line + index,
+        cells: this.splitMarkdownTableRowWithSpans(line)
+      }))
+      .filter((entry) => this.isMarkdownTableLikeLine(entry.line))
+      .filter((entry) => !this.isMarkdownTableSeparatorLine(entry.line));
+    if (rows.length === 0) {
+      return undefined;
+    }
+
+    const selected: Array<{ row: number; col: number }> = [];
+    rows.forEach((row, rowIndex) => {
+      const overlap = this.getSourceLineSelectionOverlap(row.sourceLine, row.line, from, to);
+      if (!overlap) {
+        return;
+      }
+      const cols = this.getSelectedMarkdownRowColumns(row.cells, overlap.startCh, overlap.endCh);
+      cols.forEach((col) => selected.push({ row: rowIndex, col }));
+    });
+
+    if (selected.length === 0) {
+      return undefined;
+    }
+
+    return {
+      startRow: Math.min(...selected.map((cell) => cell.row)),
+      endRow: Math.max(...selected.map((cell) => cell.row)),
+      startCol: Math.min(...selected.map((cell) => cell.col)),
+      endCol: Math.max(...selected.map((cell) => cell.col)),
+      totalRows: rows.length,
+      totalCols: Math.max(...rows.map((row) => row.cells.length), 0)
+    };
+  }
+
+  private getSourceLineSelectionOverlap(
+    lineNumber: number,
+    lineText: string,
+    from: EditorPosition,
+    to: EditorPosition
+  ): { startCh: number; endCh: number } | null {
+    if (lineNumber < from.line || lineNumber > to.line) {
+      return null;
+    }
+    const startCh = lineNumber === from.line ? from.ch : 0;
+    const endCh = lineNumber === to.line ? to.ch : lineText.length;
+    const clampedStart = Math.max(0, Math.min(lineText.length, startCh));
+    const clampedEnd = Math.max(0, Math.min(lineText.length, endCh));
+    if (clampedEnd <= clampedStart) {
+      return null;
+    }
+    return { startCh: clampedStart, endCh: clampedEnd };
+  }
+
+  private getSelectedMarkdownRowColumns(
+    cells: Array<{ text: string; start: number; end: number }>,
+    startCh: number,
+    endCh: number
+  ) {
+    return cells
+      .map((cell, col) => ({ cell, col }))
+      .filter(({ cell }) => startCh < cell.end && endCh > cell.start)
+      .map(({ col }) => col);
+  }
+
+  private getRenderedTableSelectionRangeFromSourceText(renderedRows: string[][], sourceSelectionText: string): TableEditRange | undefined {
+    const sourceRows = sourceSelectionText
+      .split(/\r?\n/)
+      .filter((line) => this.isMarkdownTableLikeLine(line))
+      .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+      .map((line) => this.splitMarkdownTableRow(line))
+      .filter((row) => row.length > 0);
+    if (sourceRows.length === 0) {
+      return undefined;
+    }
+
+    const matches: number[] = [];
+    for (let start = 0; start <= renderedRows.length - sourceRows.length; start += 1) {
+      const isMatch = sourceRows.every((sourceRow, index) => this.tableCellsMatch(sourceRow, renderedRows[start + index] ?? []));
+      if (isMatch) {
+        matches.push(start);
+      }
+    }
+    if (matches.length !== 1) {
+      return undefined;
+    }
+
+    const startRow = matches[0];
+    return {
+      startRow,
+      endRow: startRow + sourceRows.length - 1,
+      startCol: 0,
+      endCol: Math.max(...renderedRows.map((row) => row.length), 0) - 1,
+      totalRows: renderedRows.length,
+      totalCols: Math.max(...renderedRows.map((row) => row.length), 0)
+    };
+  }
+
+  private tableCellsMatch(a: string[], b: string[]) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    return a.every((cell, index) => this.normalizeTableCellText(cell) === this.normalizeTableCellText(b[index] ?? ""));
+  }
+
+  private getRenderedTableSelectionRangeFromText(renderedRows: string[][], selectionText: string): TableEditRange | undefined {
+    const selected = this.normalizeTableCellText(selectionText);
+    if (!selected) {
+      return undefined;
+    }
+    const anchoredRows = renderedRows
+      .map((row, rowIndex) => ({ row, rowIndex, anchor: this.normalizeTableCellText(row[0] ?? "") }))
+      .filter((entry) => entry.rowIndex > 0 && entry.anchor && selected.includes(entry.anchor));
+    if (anchoredRows.length > 0) {
+      const selectedRows = anchoredRows.map((entry) => entry.rowIndex);
+      return {
+        startRow: Math.min(...selectedRows),
+        endRow: Math.max(...selectedRows),
+        startCol: 0,
+        endCol: Math.max(...renderedRows.map((row) => row.length), 0) - 1,
+        totalRows: renderedRows.length,
+        totalCols: Math.max(...renderedRows.map((row) => row.length), 0)
+      };
+    }
+    const cells: Array<{ row: number; col: number }> = [];
+    renderedRows.forEach((row, rowIndex) => {
+      const normalizedRow = row.map((cell) => this.normalizeTableCellText(cell));
+      const rowText = normalizedRow.filter(Boolean).join(" ");
+      const rowSelected = rowText && selected.includes(rowText);
+      normalizedRow.forEach((cell, colIndex) => {
+        if (!cell || cell.length < 2) {
+          return;
+        }
+        if (rowSelected) {
+          cells.push({ row: rowIndex, col: colIndex });
+        }
+      });
+    });
+    const dataCells = cells.filter((cell) => cell.row > 0);
+    const usable = dataCells.length > 0 ? dataCells : cells;
+    if (usable.length === 0) {
+      return undefined;
+    }
+    const startRow = Math.min(...usable.map((cell) => cell.row));
+    const endRow = Math.max(...usable.map((cell) => cell.row));
+    const rowsInRange = renderedRows.slice(startRow, endRow + 1);
+    const fullRowsSelected = rowsInRange.every((row) => {
+      const rowText = row.map((cell) => this.normalizeTableCellText(cell)).filter(Boolean).join(" ");
+      return rowText && selected.includes(rowText);
+    });
+    return {
+      startRow,
+      endRow,
+      startCol: fullRowsSelected ? 0 : Math.min(...usable.map((cell) => cell.col)),
+      endCol: fullRowsSelected ? Math.max(...renderedRows.map((row) => row.length), 0) - 1 : Math.max(...usable.map((cell) => cell.col)),
+      totalRows: renderedRows.length,
+      totalCols: Math.max(...renderedRows.map((row) => row.length), 0)
+    };
+  }
+
+  private getRenderedTableSelectionRect(cells: HTMLTableCellElement[]): DOMRect | undefined {
+    if (cells.length === 0) {
+      return undefined;
+    }
+    const rects = cells
+      .map((cell) => cell.getBoundingClientRect())
+      .filter((rect) => !this.isEmptyDomRect(rect));
+    if (rects.length === 0) {
+      return undefined;
+    }
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const right = Math.max(...rects.map((rect) => rect.right));
+    const bottom = Math.max(...rects.map((rect) => rect.bottom));
+    return new DOMRect(left, top, right - left, bottom - top);
+  }
+
+  private isEmptyDomRect(rect: DOMRect | ClientRect | null | undefined) {
+    return !rect || (rect.width === 0 && rect.height === 0);
+  }
+
+  private async openInlineEditForRenderedSelection(view: MarkdownView, selectedText: string, renderedTable?: RenderedTableSelection) {
+    if (!view.file) {
+      new Notice(this.tr("无法定位当前笔记。", "Cannot locate the active note."));
+      return;
+    }
+    const source = await this.app.vault.cachedRead(view.file);
+    const resolved = renderedTable
+      ? this.resolveEditorSelectionTableInSource(source, renderedTable)
+        ?? this.resolveMarkedRenderedTableInSource(source, renderedTable)
+        ?? this.resolveExactRenderedTableInSource(source, renderedTable)
+      : this.resolveRenderedSelectionInSource(source, selectedText);
+    if (!resolved) {
+      if (renderedTable) {
+        const detail = this.describeRenderedTableLocateFailure(view, source, renderedTable);
+        console.warn("[codex-ai-agent] Inline table locate failed", detail);
+        new Notice(`${this.tr("无法可靠定位源码范围", "Could not safely locate the source range")}：${detail.reason}`);
+        return;
+      }
+      new Notice(this.tr("无法可靠定位源码范围，请切到编辑模式后再试。", "Could not safely locate the source range. Try again in editing mode."));
+      return;
+    }
+    const previousMode = typeof view.getMode === "function" ? view.getMode() : "preview";
+    const previousSource = this.getMarkdownViewSourceFlag(view);
+    const previousScrollTop = this.getActiveMarkdownScrollTop(view);
+    await view.leaf.setViewState({
+      type: "markdown",
+      state: { file: view.file.path, mode: "source", source: true },
+      active: true
+    });
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView) ?? view;
+    activeView.editor.setSelection(resolved.from, resolved.to);
+    await this.openInlineEditForEditorSelection(activeView.editor, activeView, { previousMode, previousSource, previousScrollTop, sourceReady: true, tableEditRange: renderedTable?.editRange });
+  }
+
   private hideSelectionAddButton() {
     this.selectionButtonEl?.remove();
     this.selectionButtonEl = null;
+  }
+
+  private async openInlineEditForEditorSelection(
+    editor: Editor,
+    view: MarkdownView,
+    previousState?: { previousMode: "source" | "preview"; previousSource: boolean; previousScrollTop: number; sourceReady?: boolean; tableEditRange?: TableEditRange }
+  ) {
+    const selected = editor.getSelection();
+    if (!selected.trim()) {
+      new Notice(this.tr("请先选中要修改的内容。", "Select text to edit first."));
+      return;
+    }
+
+    this.closeInlineEdit();
+    let from = this.normalizeEditorPosition(editor.getCursor("from"));
+    let to = this.normalizeEditorPosition(editor.getCursor("to"));
+    const tableRange = this.getMarkdownTableRange(editor, from, to);
+    const sourceTableEditRange = tableRange
+      ? this.getSourceTableSelectionRange(editor, from, to, tableRange)
+      : undefined;
+    const isTableMode = Boolean(tableRange);
+    if (tableRange) {
+      if (!previousState?.sourceReady && view.file) {
+        const previousMode = typeof view.getMode === "function" ? view.getMode() : "source";
+        const previousSource = this.getMarkdownViewSourceFlag(view);
+        const previousScrollTop = this.getActiveMarkdownScrollTop(view);
+        await view.leaf.setViewState({
+          type: "markdown",
+          state: { file: view.file.path, mode: "source", source: true },
+          active: true
+        });
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView) ?? view;
+        activeView.editor.setSelection(tableRange.from, tableRange.to);
+        await this.openInlineEditForEditorSelection(activeView.editor, activeView, {
+          previousMode: previousState?.previousMode ?? previousMode,
+          previousSource: previousState?.previousSource ?? previousSource,
+          previousScrollTop: previousState?.previousScrollTop ?? previousScrollTop,
+          sourceReady: true,
+          tableEditRange: previousState?.tableEditRange
+        });
+        return;
+      }
+      from = tableRange.from;
+      to = tableRange.to;
+      editor.setSelection(from, to);
+    }
+    const originalText = editor.getRange(from, to);
+    const previousMode = previousState?.previousMode ?? (typeof view.getMode === "function" ? view.getMode() : "source");
+    const previousSource = previousState?.previousSource ?? this.getMarkdownViewSourceFlag(view);
+    const previousScrollTop = previousState?.previousScrollTop ?? this.getActiveMarkdownScrollTop(view);
+    const id = `inline-edit:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+    const state: InlineEditSelectionState = {
+      id,
+      editor,
+      view,
+      file: view.file,
+      from,
+      to,
+      originalText,
+      beforeContext: this.getEditorContextBefore(editor, from),
+      afterContext: this.getEditorContextAfter(editor, to),
+      request: "",
+      resultText: "",
+      status: "idle",
+      statusTitle: "",
+      isTableMode,
+      tableEditRange: isTableMode ? previousState?.tableEditRange ?? sourceTableEditRange : undefined,
+      conversationMode: "current",
+      quickCommands: this.getRunnableInlineEditQuickCommands(),
+      previousMode,
+      previousSource,
+      previousScrollTop
+    };
+    this.inlineEditState = state;
+    activeInlineEditController = this;
+    this.applyInlineEditDecorations(state);
+    editor.scrollIntoView({ from: to, to }, true);
+    editor.focus();
+  }
+
+  async handleInlineEditSubmit(id: string, request: string) {
+    const state = this.inlineEditState;
+    if (!state || state.id !== id || state.status === "running") {
+      return;
+    }
+    const trimmed = request.trim();
+    if (!trimmed) {
+      new Notice(this.tr("请输入修改要求。", "Enter an edit request."));
+      return;
+    }
+    const currentText = state.editor.getRange(state.from, state.to);
+    if (currentText !== state.originalText) {
+      this.updateInlineEditState({ status: "error", statusTitle: this.tr("选区内容已变化，请重新选择。", "Selection changed. Select it again.") });
+      return;
+    }
+    const isQuestionOnly = this.isInlineEditQuestionRequest(trimmed);
+    this.updateInlineEditState({ request: trimmed, status: "running", statusTitle: this.tr("思考中", "Thinking"), resultText: "" });
+    const runId = ++this.inlineEditRunId;
+    let buffer = "";
+    const settings = this.getSettings();
+    const cwd = this.getVaultBasePath();
+    if (!cwd) {
+      this.updateInlineEditState({ status: "error", statusTitle: this.tr("失败", "Failed") });
+      return;
+    }
+    const codexBin = process.env.CODEX_BIN || settings.codexBin || DEFAULT_CODEX_BIN;
+    const extraPath = this.getParentPath(settings.nodeBin);
+    const adapter = settings.adapterMode === "exec-json" ? new ExecJsonAdapter() : new AppServerAdapter();
+    const prompt = isQuestionOnly
+      ? this.composeInlineEditQuestionPrompt({ ...state, request: trimmed })
+      : this.composeInlineEditPrompt({ ...state, request: trimmed });
+    const agentView = await this.activateView();
+    const conversationRun = agentView?.beginInlineEditConversation(state.conversationMode, {
+      request: trimmed,
+      filePath: state.file?.path,
+      originalText: state.originalText,
+      isTableMode: state.isTableMode
+    });
+    this.updateInlineEditState({ conversationRun });
+    const handle = adapter.start(
+      {
+        codexBin,
+        extraPath,
+        args: [
+          "exec",
+          "--json",
+          "--color",
+          "never",
+          "--sandbox",
+          "read-only",
+          "--ephemeral",
+          "--skip-git-repo-check",
+          "-C",
+          cwd,
+          "-m",
+          this.toCodexModel(settings.defaultModel),
+          "-"
+        ],
+        cwd,
+        prompt,
+        threadId: conversationRun?.threadId,
+        model: this.toCodexModel(settings.defaultModel),
+        sandboxMode: "read-only",
+        approvalPolicy: "never",
+        reasoningEffort: this.toCodexReasoningEffort(settings.defaultReasoningLevel)
+      },
+      (event) => {
+        if (runId !== this.inlineEditRunId || this.inlineEditState?.id !== id) {
+          return;
+        }
+        const floatingTitle = this.getInlineEditFloatingEventTitle(event);
+        if (floatingTitle && this.inlineEditState?.status === "running") {
+          this.updateInlineEditState({ statusTitle: floatingTitle });
+        }
+        conversationRun?.onEvent(event);
+        if (event.type === "message_delta") {
+          buffer += event.delta;
+          return;
+        }
+        if (event.type === "message") {
+          buffer += event.markdown;
+          return;
+        }
+        if (event.type === "error") {
+          this.updateInlineEditState({ status: "error", statusTitle: this.tr("失败", "Failed") });
+        }
+      },
+      (code) => {
+        if (runId !== this.inlineEditRunId || this.inlineEditState?.id !== id) {
+          return;
+        }
+        this.inlineEditHandle = null;
+        if (code !== 0 && !buffer.trim()) {
+          this.updateInlineEditState({ status: "error", statusTitle: this.tr("失败", "Failed") });
+          conversationRun?.onError(this.tr("Inline Edit 失败", "Inline edit failed"), this.tr("Codex 没有返回替换内容。", "Codex did not return a replacement."));
+          return;
+        }
+        if (isQuestionOnly) {
+          this.updateInlineEditState({ status: "idle", statusTitle: "" });
+          conversationRun?.onComplete();
+          new Notice(this.tr("已在 Codex 对话中回答，未生成修改。", "Answered in the Codex conversation without generating an edit."));
+          return;
+        }
+        const replacement = this.extractInlineEditReplacement(buffer);
+        if (!replacement.trim()) {
+          this.updateInlineEditState({ status: "error", statusTitle: this.tr("失败", "Failed") });
+          conversationRun?.onError(this.tr("Inline Edit 失败", "Inline edit failed"), this.tr("Codex 返回了空替换内容。", "Codex returned an empty replacement."));
+          return;
+        }
+        this.updateInlineEditState({ resultText: replacement, status: "result", statusTitle: this.tr("已完成", "Completed") });
+        conversationRun?.onComplete();
+      }
+    );
+    this.inlineEditHandle = handle;
+  }
+
+  handleInlineEditStop(id: string) {
+    if (!this.inlineEditState || this.inlineEditState.id !== id) {
+      return;
+    }
+    this.inlineEditRunId += 1;
+    this.inlineEditHandle?.cancel();
+    this.inlineEditHandle = null;
+    this.updateInlineEditState({ status: "idle", statusTitle: "" });
+  }
+
+  handleInlineEditApply(id: string) {
+    const state = this.inlineEditState;
+    if (!state || state.id !== id || state.status !== "result") {
+      return;
+    }
+    const currentText = state.editor.getRange(state.from, state.to);
+    if (currentText !== state.originalText) {
+      new Notice(this.tr("选区内容已变化，无法安全应用。", "Selection changed; cannot apply safely."));
+      this.updateInlineEditState({ status: "error", statusTitle: this.tr("选区内容已变化", "Selection changed") });
+      return;
+    }
+    if (state.isTableMode && state.tableEditRange && !this.validateTableEditRange(state.originalText, state.resultText, state.tableEditRange)) {
+      new Notice(this.tr("Codex 修改了选区外的表格单元格，已阻止应用。", "Codex changed table cells outside the selected range, so the change was not applied."));
+      this.updateInlineEditState({ status: "error", statusTitle: this.tr("选区外单元格被修改", "Cells outside selection changed") });
+      return;
+    }
+    state.editor.replaceRange(state.resultText, state.from, state.to);
+    this.closeInlineEdit(true);
+  }
+
+  handleInlineEditReject(id: string) {
+    if (!this.inlineEditState || this.inlineEditState.id !== id) {
+      return;
+    }
+    this.closeInlineEdit(true);
+  }
+
+  handleInlineEditClose(id: string) {
+    if (!this.inlineEditState || this.inlineEditState.id !== id) {
+      return;
+    }
+    this.closeInlineEdit(true);
+  }
+
+  handleInlineEditConversationMode(id: string, mode: InlineEditConversationMode) {
+    if (!this.inlineEditState || this.inlineEditState.id !== id || this.inlineEditState.status === "running") {
+      return;
+    }
+    this.updateInlineEditState({ conversationMode: mode });
+  }
+
+  handleInlineEditQuickCommand(id: string, commandId: string) {
+    const state = this.inlineEditState;
+    if (!state || state.id !== id || state.status === "running") {
+      return;
+    }
+    const command = state.quickCommands.find((entry) => entry.id === commandId);
+    if (!command || !command.prompt.trim()) {
+      return;
+    }
+    this.handleInlineEditSubmit(id, command.prompt);
+  }
+
+  private getRunnableInlineEditQuickCommands() {
+    const settings = this.getSettings();
+    return this.localizeInlineEditQuickCommands(settings.inlineEditQuickCommands, settings.language)
+      .filter((command) => command.name.trim() && command.prompt.trim());
+  }
+
+  private updateInlineEditState(patch: Partial<InlineEditSelectionState>) {
+    if (!this.inlineEditState) {
+      return;
+    }
+    this.inlineEditState = { ...this.inlineEditState, ...patch };
+    this.applyInlineEditDecorations(this.inlineEditState);
+  }
+
+  private applyInlineEditDecorations(state: InlineEditSelectionState) {
+    const editorView = this.getCodeMirrorEditorView(state.editor);
+    if (!editorView || !state.file) {
+      return;
+    }
+    this.inlineEditEditorView = editorView;
+    editorView.dispatch({
+      effects: setInlineEditEffect.of({
+        id: state.id,
+        filePath: state.file.path,
+        from: this.editorPositionToOffset(editorView, state.from),
+        to: this.editorPositionToOffset(editorView, state.to),
+        originalText: state.originalText,
+        request: state.request,
+        resultText: state.resultText,
+        status: state.status,
+        statusTitle: state.statusTitle,
+        isTableMode: state.isTableMode,
+        tableEditRange: state.tableEditRange,
+        conversationMode: state.conversationMode,
+        quickCommands: state.quickCommands,
+        language: this.getSettings().language
+      })
+    });
+  }
+
+  private closeInlineEdit(restoreMode = false) {
+    const state = this.inlineEditState;
+    this.inlineEditRunId += 1;
+    this.inlineEditHandle?.cancel();
+    this.inlineEditHandle = null;
+    this.hideSelectionAddButton();
+    if (this.inlineEditEditorView) {
+      this.inlineEditEditorView.dispatch({ effects: setInlineEditEffect.of(null) });
+    }
+    this.inlineEditEditorView = null;
+    this.inlineEditState = null;
+    if (activeInlineEditController === this) {
+      activeInlineEditController = null;
+    }
+    if (restoreMode && state?.file && (state.previousMode === "preview" || state.previousSource === false)) {
+      void this.restoreMarkdownViewMode(state.file.path, state.previousMode, state.previousSource, state.previousScrollTop);
+    }
+  }
+
+  private async restoreMarkdownViewMode(filePath: string, mode: "source" | "preview", sourceMode: boolean, scrollTop: number) {
+    const leaf = this.app.workspace.getLeavesOfType("markdown")
+      .find((entry) => entry.view instanceof MarkdownView && entry.view.file?.path === filePath)
+      ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+    if (!leaf) {
+      return;
+    }
+    await leaf.setViewState({
+      type: "markdown",
+      state: { file: filePath, mode, source: sourceMode },
+      active: true
+    });
+    this.app.workspace.revealLeaf(leaf);
+    window.setTimeout(() => {
+      const restoredView = leaf.view instanceof MarkdownView ? leaf.view : this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (restoredView) {
+        this.setActiveMarkdownScrollTop(restoredView, scrollTop);
+      }
+    }, 50);
+  }
+
+  private getInlineEditFloatingEventTitle(event: AgentEvent) {
+    if (event.type === "status") {
+      return this.localizeInlineEditStatusTitle(event.title || "Thinking");
+    }
+    if (event.type === "message_delta" || event.type === "message") {
+      return this.tr("生成中", "Generating");
+    }
+    if (event.type === "tool") {
+      return event.title || this.tr("使用工具", "Using tool");
+    }
+    if (event.type === "command") {
+      return event.status === "failed"
+        ? this.tr("命令失败", "Command failed")
+        : event.status === "done"
+          ? this.tr("命令完成", "Command complete")
+          : this.tr("运行命令", "Running command");
+    }
+    if (event.type === "plan") {
+      return event.title || this.tr("计划", "Plan");
+    }
+    if (event.type === "diff") {
+      return this.tr("Diff 已更新", "Diff updated");
+    }
+    if (event.type === "error") {
+      return this.tr("失败", "Failed");
+    }
+    return "";
+  }
+
+  private localizeInlineEditStatusTitle(title: string) {
+    const normalized = title.trim().toLowerCase();
+    if (normalized === "thinking") {
+      return this.tr("思考中", "Thinking");
+    }
+    if (normalized === "generating") {
+      return this.tr("生成中", "Generating");
+    }
+    if (normalized === "failed") {
+      return this.tr("失败", "Failed");
+    }
+    if (normalized === "completed") {
+      return this.tr("已完成", "Completed");
+    }
+    if (normalized === "command failed") {
+      return this.tr("命令失败", "Command failed");
+    }
+    if (normalized === "command complete") {
+      return this.tr("命令完成", "Command complete");
+    }
+    if (normalized === "running command") {
+      return this.tr("运行命令", "Running command");
+    }
+    if (normalized === "diff updated") {
+      return this.tr("Diff 已更新", "Diff updated");
+    }
+    return title;
+  }
+
+  private composeInlineEditPrompt(state: InlineEditSelectionState) {
+    return [
+      "You are editing a selected range in an Obsidian Markdown note.",
+      "Return only the replacement text for the selected range.",
+      "Do not explain your changes. Do not use Markdown fences unless they are part of the replacement.",
+      "Wrap the replacement exactly once in <replacement> and </replacement> tags.",
+      "Do not run tools, do not read files, and do not modify files.",
+      state.isTableMode ? "The selected range is a Markdown table source block. Preserve valid Markdown table syntax." : "Preserve the user's Markdown style unless the request requires changing it.",
+      state.tableEditRange ? `Table edit scope: ${formatTableEditRange(state.tableEditRange, "en")}. The full Markdown table is provided as context, but you may only change cells inside that row and column rectangle. Preserve every cell outside that rectangle exactly.` : "",
+      state.tableEditRange ? "If deleting table content, remove whole rows or columns only when the edit scope covers those full rows or columns. Otherwise, clear the selected cell contents while preserving table delimiters and dimensions." : "",
+      "",
+      `File: ${state.file?.path ?? "active note"}`,
+      "",
+      "User edit request:",
+      state.request,
+      "",
+      "Context before selection:",
+      state.beforeContext || "(none)",
+      "",
+      state.tableEditRange ? "Selected table cells inside edit scope:" : "",
+      state.tableEditRange ? this.getSelectedTableScopeText(state.originalText, state.tableEditRange) : "",
+      state.tableEditRange ? "" : "",
+      "Selected text:",
+      state.originalText,
+      "",
+      "Context after selection:",
+      state.afterContext || "(none)"
+    ].join("\n");
+  }
+
+  private composeInlineEditQuestionPrompt(state: InlineEditSelectionState) {
+    return [
+      "You are answering a question about a selected range in an Obsidian Markdown note.",
+      "Do not modify the note. Do not return replacement tags. Answer the user's question directly and concisely.",
+      state.isTableMode ? "The selected range is a Markdown table source block." : "The selected range is Markdown text.",
+      state.tableEditRange ? `Selected table scope: ${formatTableEditRange(state.tableEditRange, "en")}.` : "",
+      state.tableEditRange ? "Selected table cells:" : "",
+      state.tableEditRange ? this.getSelectedTableScopeText(state.originalText, state.tableEditRange) : "",
+      "",
+      `File: ${state.file?.path ?? "active note"}`,
+      "",
+      "User question:",
+      state.request,
+      "",
+      "Selected text:",
+      state.originalText
+    ].join("\n");
+  }
+
+  private getSelectedTableScopeText(markdown: string, range: TableEditRange) {
+    const rows = this.parseMarkdownTableCells(markdown);
+    return rows
+      .slice(range.startRow, range.endRow + 1)
+      .map((row) => row.slice(range.startCol, range.endCol + 1).join(" | "))
+      .join("\n");
+  }
+
+  private isInlineEditQuestionRequest(request: string) {
+    const normalized = request.replace(/\s+/g, "");
+    const hasQuestionMarker = /[?？]|是什么|什么|哪些|为何|为什么|怎么|如何|是否|吗$|内容是什么/.test(normalized);
+    const hasEditIntent = /改成|改为|替换|删除|新增|添加|补充|改写|润色|总结|翻译|生成|调整|优化|压缩|扩写|修正|重写|提炼|简化|合并|拆分|转换|变成/.test(normalized);
+    return hasQuestionMarker && !hasEditIntent;
+  }
+
+  private extractInlineEditReplacement(output: string) {
+    const tagged = output.match(/<replacement>\s*([\s\S]*?)\s*<\/replacement>/i);
+    if (tagged) {
+      return tagged[1].replace(/^\n+|\n+$/g, "");
+    }
+    const fenced = output.match(/^```(?:markdown|md|text)?\n([\s\S]*?)\n```$/i);
+    return (fenced ? fenced[1] : output).replace(/^\n+|\n+$/g, "");
+  }
+
+  private resolveEditorSelectionTableInSource(source: string, renderedTable: RenderedTableSelection): { from: EditorPosition; to: EditorPosition } | null {
+    const range = renderedTable.editorTableRange;
+    if (!range) {
+      return null;
+    }
+    const lines = source.split(/\r?\n/);
+    if (range.from.line < 0 || range.to.line < range.from.line || range.to.line >= lines.length) {
+      return null;
+    }
+    const tableLines = lines.slice(range.from.line, range.to.line + 1);
+    if (!tableLines.some((line) => this.isMarkdownTableSeparatorLine(line))) {
+      return null;
+    }
+    const sourceRows = tableLines
+      .filter((line) => this.isMarkdownTableLikeLine(line))
+      .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+      .map((line) => this.splitMarkdownTableRow(line));
+    return this.tableRowsMatchSourceRows(sourceRows, renderedTable.rows) ? range : null;
+  }
+
+  private resolveMarkedRenderedTableInSource(source: string, renderedTable: RenderedTableSelection): { from: EditorPosition; to: EditorPosition } | null {
+    const lines = source.split(/\r?\n/);
+    const start = renderedTable.sourceStartLine;
+    const end = renderedTable.sourceEndLine;
+    if (typeof start !== "number" || typeof end !== "number" || start < 0 || end < start || end >= lines.length) {
+      return null;
+    }
+    const tableLines = lines.slice(start, end + 1);
+    if (!tableLines.some((line) => this.isMarkdownTableSeparatorLine(line))) {
+      return null;
+    }
+    const rows = tableLines
+      .filter((line) => this.isMarkdownTableLikeLine(line))
+      .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+      .map((line) => this.splitMarkdownTableRow(line));
+    const renderedRows = renderedTable.rows.map((row) => row.map((cell) => this.normalizeTableCellText(cell)));
+    if (rows.length !== renderedRows.length) {
+      return null;
+    }
+    const sourceCols = Math.max(...rows.map((row) => row.length), 0);
+    const renderedCols = Math.max(...renderedRows.map((row) => row.length), 0);
+    if (sourceCols !== renderedCols) {
+      return null;
+    }
+    return {
+      from: { line: start, ch: 0 },
+      to: { line: end, ch: lines[end]?.length ?? 0 }
+    };
+  }
+
+  private resolveExactRenderedTableInSource(source: string, renderedTable: RenderedTableSelection): { from: EditorPosition; to: EditorPosition } | null {
+    const candidates = this.getMarkdownTableCandidates(source)
+      .filter((candidate) => this.tableRowsMatchSourceRows(candidate.rows, renderedTable.rows));
+    if (candidates.length !== 1) {
+      return null;
+    }
+    const match = candidates[0];
+    return {
+      from: { line: match.start, ch: 0 },
+      to: { line: match.end, ch: match.lines[match.lines.length - 1]?.length ?? 0 }
+    };
+  }
+
+  private describeRenderedTableLocateFailure(view: MarkdownView, source: string, renderedTable: RenderedTableSelection) {
+    const lines = source.split(/\r?\n/);
+    const start = renderedTable.sourceStartLine;
+    const end = renderedTable.sourceEndLine;
+    const marked = typeof start === "number" && typeof end === "number";
+    if (!marked) {
+      const editorView = this.getCodeMirrorEditorView(view.editor);
+      const table = renderedTable.table;
+      let livePreviewProbe = "no-editor-view";
+      if (editorView && table) {
+        try {
+          const range = this.getLivePreviewTableRange(editorView, table, lines);
+          livePreviewProbe = range
+            ? `mapped:${range.from.line}-${range.to.line}`
+            : "not-mapped";
+        } catch (error) {
+          livePreviewProbe = `error:${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+      return {
+        reason: this.tr("当前表格没有源码标记", "Current table has no source marker"),
+        mode: typeof view.getMode === "function" ? view.getMode() : "unknown",
+        sourceLine: renderedTable.sourceLine,
+        livePreviewProbe,
+        editorTableRange: renderedTable.editorTableRange
+          ? `${renderedTable.editorTableRange.from.line}-${renderedTable.editorTableRange.to.line}`
+          : "none",
+        rowCount: renderedTable.rows.length,
+        colCount: Math.max(...renderedTable.rows.map((row) => row.length), 0),
+        className: table?.className ?? ""
+      };
+    }
+    if (start < 0 || end < start || end >= lines.length) {
+      return {
+        reason: this.tr("源码标记行号越界", "Source marker line range is invalid"),
+        start,
+        end,
+        lineCount: lines.length
+      };
+    }
+    const tableLines = lines.slice(start, end + 1);
+    if (!tableLines.some((line) => this.isMarkdownTableSeparatorLine(line))) {
+      return {
+        reason: this.tr("源码标记范围不是 Markdown 表格", "Source marker range is not a Markdown table"),
+        start,
+        end,
+        sourcePreview: tableLines.join("\n").slice(0, 240)
+      };
+    }
+    const rows = tableLines
+      .filter((line) => this.isMarkdownTableLikeLine(line))
+      .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+      .map((line) => this.splitMarkdownTableRow(line));
+    return {
+      reason: this.tr("源码表格和渲染表格行列不一致", "Source and rendered table shape do not match"),
+      start,
+      end,
+      sourceRows: rows.length,
+      renderedRows: renderedTable.rows.length,
+      sourceCols: Math.max(...rows.map((row) => row.length), 0),
+      renderedCols: Math.max(...renderedTable.rows.map((row) => row.length), 0)
+    };
+  }
+
+  private tableRowsMatchSourceRows(sourceRows: string[][], renderedRows: string[][]) {
+    if (sourceRows.length !== renderedRows.length) {
+      return false;
+    }
+    for (let row = 0; row < sourceRows.length; row += 1) {
+      if (sourceRows[row].length !== renderedRows[row]?.length) {
+        return false;
+      }
+      for (let col = 0; col < sourceRows[row].length; col += 1) {
+        if (this.normalizeTableCellText(sourceRows[row][col]) !== this.normalizeTableCellText(renderedRows[row][col] ?? "")) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  private resolveRenderedTableInSource(source: string, renderedTable: RenderedTableSelection): { from: EditorPosition; to: EditorPosition } | null {
+    const candidates = this.getMarkdownTableCandidates(source);
+    if (candidates.length === 0 || renderedTable.rows.length === 0) {
+      return null;
+    }
+    const scored = candidates
+      .map((candidate, index) => ({
+        ...candidate,
+        score: this.scoreMarkdownTableCandidate(candidate, index, renderedTable)
+      }))
+      .sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    const second = scored[1];
+    if (!best || best.score < 80 || (second && best.score - second.score < 24)) {
+      return null;
+    }
+    return {
+      from: { line: best.start, ch: 0 },
+      to: { line: best.end, ch: best.lines[best.lines.length - 1]?.length ?? 0 }
+    };
+  }
+
+  private getMarkdownTableCandidates(source: string): Array<{ start: number; end: number; lines: string[]; rows: string[][] }> {
+    const lines = source.split(/\r?\n/);
+    const candidates: Array<{ start: number; end: number; lines: string[]; rows: string[][] }> = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!this.isMarkdownTableLikeLine(lines[index])) {
+        continue;
+      }
+      let start = index;
+      while (start > 0 && this.isMarkdownTableLikeLine(lines[start - 1])) {
+        start -= 1;
+      }
+      let end = index;
+      while (end + 1 < lines.length && this.isMarkdownTableLikeLine(lines[end + 1])) {
+        end += 1;
+      }
+      const tableLines = lines.slice(start, end + 1);
+      if (tableLines.some((line) => this.isMarkdownTableSeparatorLine(line))) {
+        const rows = tableLines
+          .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+          .map((line) => this.splitMarkdownTableRow(line));
+        if (rows.length > 0) {
+          candidates.push({ start, end, lines: tableLines, rows });
+        }
+      }
+      index = end;
+    }
+    return candidates;
+  }
+
+  private scoreMarkdownTableCandidate(
+    candidate: { start: number; end: number; rows: string[][] },
+    candidateIndex: number,
+    renderedTable: RenderedTableSelection
+  ) {
+    const renderedRows = renderedTable.rows.map((row) => row.map((cell) => this.normalizeTableCellText(cell)));
+    const candidateRows = candidate.rows.map((row) => row.map((cell) => this.normalizeTableCellText(cell)));
+    const renderedColCount = Math.max(...renderedRows.map((row) => row.length), 0);
+    const candidateColCount = Math.max(...candidateRows.map((row) => row.length), 0);
+    let score = 0;
+
+    if (candidateRows.length === renderedRows.length) {
+      score += 35;
+    } else {
+      score -= Math.min(35, Math.abs(candidateRows.length - renderedRows.length) * 8);
+    }
+    if (candidateColCount === renderedColCount) {
+      score += 30;
+    } else {
+      score -= Math.min(30, Math.abs(candidateColCount - renderedColCount) * 10);
+    }
+
+    score += this.scoreCellList(candidateRows[0] ?? [], renderedRows[0] ?? [], 12, 28);
+    score += this.scoreCellList(
+      candidateRows.slice(1).map((row) => row[0] ?? "").filter(Boolean),
+      renderedRows.slice(1).map((row) => row[0] ?? "").filter(Boolean),
+      8,
+      24
+    );
+    score += this.scoreCellList(candidateRows.flat(), renderedRows.flat(), 2, 22);
+
+    const selectedByCoordinate = this.getRenderedSelectedCoordinateTexts(renderedRows, renderedTable.editRange);
+    if (selectedByCoordinate.length > 0) {
+      let coordinateMatches = 0;
+      selectedByCoordinate.forEach((entry) => {
+        if ((candidateRows[entry.row]?.[entry.col] ?? "") === entry.text) {
+          coordinateMatches += 1;
+        }
+      });
+      score += coordinateMatches * 26;
+      if (coordinateMatches === selectedByCoordinate.length) {
+        score += 34;
+      }
+    } else {
+      const selectedTexts = renderedTable.selectedTexts
+        .map((text) => this.normalizeTableCellText(text))
+        .filter(Boolean);
+      score += this.scoreCellList(candidateRows.flat(), selectedTexts, 10, 26);
+    }
+
+    if (typeof renderedTable.sourceLine === "number") {
+      if (renderedTable.sourceLine >= candidate.start && renderedTable.sourceLine <= candidate.end) {
+        score += 14;
+      } else {
+        const distance = Math.min(Math.abs(renderedTable.sourceLine - candidate.start), Math.abs(renderedTable.sourceLine - candidate.end));
+        score += Math.max(0, 8 - distance);
+      }
+    }
+    if (candidateIndex === renderedTable.index) {
+      score += 6;
+    }
+    return score;
+  }
+
+  private scoreCellList(candidateCells: string[], renderedCells: string[], perExact: number, maxOverlap: number) {
+    const candidateSet = new Set(candidateCells.map((cell) => this.normalizeTableCellText(cell)).filter(Boolean));
+    const rendered = renderedCells.map((cell) => this.normalizeTableCellText(cell)).filter(Boolean);
+    if (candidateSet.size === 0 || rendered.length === 0) {
+      return 0;
+    }
+    const exact = rendered.filter((cell) => candidateSet.has(cell)).length;
+    const ratio = exact / rendered.length;
+    return exact * perExact + Math.round(ratio * maxOverlap);
+  }
+
+  private getRenderedSelectedCoordinateTexts(rows: string[][], range?: TableEditRange) {
+    if (!range) {
+      return [];
+    }
+    const selected: Array<{ row: number; col: number; text: string }> = [];
+    for (let row = range.startRow; row <= range.endRow; row += 1) {
+      for (let col = range.startCol; col <= range.endCol; col += 1) {
+        const text = this.normalizeTableCellText(rows[row]?.[col] ?? "");
+        if (text) {
+          selected.push({ row, col, text });
+        }
+      }
+    }
+    return selected;
+  }
+
+  private resolveRenderedSelectionInSource(source: string, selectedText: string, tableIndex?: number, sourceLine?: number): { from: EditorPosition; to: EditorPosition } | null {
+    const exact = this.findUniqueSourceMatch(source, selectedText);
+    if (exact) {
+      return exact;
+    }
+    const byContent = this.findMarkdownTableRangeForRenderedSelection(source, selectedText);
+    if (byContent) {
+      return byContent;
+    }
+    if (typeof sourceLine === "number") {
+      const byLine = this.findMarkdownTableRangeNearSourceLine(source, sourceLine);
+      if (byLine) {
+        return byLine;
+      }
+    }
+    return this.findMarkdownTableRangeForRenderedSelection(source, selectedText, tableIndex, true);
+  }
+
+  private findMarkdownTableRangeNearSourceLine(source: string, sourceLine: number): { from: EditorPosition; to: EditorPosition } | null {
+    const lines = source.split(/\r?\n/);
+    const candidates = [
+      sourceLine,
+      sourceLine - 1,
+      sourceLine + 1,
+      sourceLine - 2,
+      sourceLine + 2
+    ].filter((line) => line >= 0 && line < lines.length);
+    for (const line of candidates) {
+      const range = this.getMarkdownTableRangeInLines(lines, line);
+      if (range) {
+        return range;
+      }
+    }
+    return null;
+  }
+
+  private findUniqueSourceMatch(source: string, selectedText: string): { from: EditorPosition; to: EditorPosition } | null {
+    const needle = selectedText.trim();
+    if (!needle) {
+      return null;
+    }
+    const first = source.indexOf(needle);
+    if (first < 0 || source.indexOf(needle, first + needle.length) >= 0) {
+      return null;
+    }
+    return {
+      from: this.sourceIndexToEditorPosition(source, first),
+      to: this.sourceIndexToEditorPosition(source, first + needle.length)
+    };
+  }
+
+  private findMarkdownTableRangeForRenderedSelection(source: string, selectedText: string, tableIndex?: number, allowIndexFallback = false): { from: EditorPosition; to: EditorPosition } | null {
+    const normalizedSelection = this.normalizeRenderedText(selectedText);
+    if (!normalizedSelection) {
+      return null;
+    }
+    const lines = source.split(/\r?\n/);
+    const ranges: Array<{ start: number; end: number; rendered: string }> = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!this.isMarkdownTableLikeLine(lines[index])) {
+        continue;
+      }
+      let start = index;
+      while (start > 0 && this.isMarkdownTableLikeLine(lines[start - 1])) {
+        start -= 1;
+      }
+      let end = index;
+      while (end + 1 < lines.length && this.isMarkdownTableLikeLine(lines[end + 1])) {
+        end += 1;
+      }
+      const hasSeparator = lines.slice(start, end + 1).some((line) => this.isMarkdownTableSeparatorLine(line));
+      if (hasSeparator) {
+        const rendered = this.normalizeRenderedText(lines.slice(start, end + 1).map((line) => line.replace(/\|/g, " ")).join(" "));
+        ranges.push({ start, end, rendered });
+      }
+      index = end;
+    }
+    if (allowIndexFallback && typeof tableIndex === "number" && ranges[tableIndex]) {
+      const match = ranges[tableIndex];
+      return {
+        from: { line: match.start, ch: 0 },
+        to: { line: match.end, ch: lines[match.end]?.length ?? 0 }
+      };
+    }
+    if (allowIndexFallback && ranges.length === 1) {
+      return {
+        from: { line: ranges[0].start, ch: 0 },
+        to: { line: ranges[0].end, ch: lines[ranges[0].end]?.length ?? 0 }
+      };
+    }
+    const tokens = normalizedSelection.split(/\s+/).filter((token) => token.length > 1);
+    const scored = ranges
+      .map((range) => {
+        const matched = tokens.filter((token) => range.rendered.includes(token)).length;
+        return {
+          ...range,
+          score: range.rendered.includes(normalizedSelection) ? tokens.length + 10 : matched
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+    const match = scored[0];
+    if (!match || match.score === 0 || scored[1]?.score === match.score) {
+      return null;
+    }
+    return {
+      from: { line: match.start, ch: 0 },
+      to: { line: match.end, ch: lines[match.end]?.length ?? 0 }
+    };
+  }
+
+  private normalizeRenderedText(text: string) {
+    return text.replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  private normalizeTableCellText(text: string) {
+    return text.replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  private splitMarkdownTableRow(line: string) {
+    return this.splitMarkdownTableRowWithSpans(line).map((cell) => this.normalizeTableCellText(cell.text));
+  }
+
+  private splitMarkdownTableRowWithSpans(line: string): Array<{ text: string; start: number; end: number }> {
+    const cells: Array<{ text: string; start: number; end: number }> = [];
+    let current = "";
+    let start = 0;
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index];
+      if (char === "\\" && line[index + 1] === "|") {
+        current += "|";
+        index += 1;
+        continue;
+      }
+      if (char === "|") {
+        cells.push({ text: current, start, end: index });
+        current = "";
+        start = index + 1;
+        continue;
+      }
+      current += char;
+    }
+    cells.push({ text: current, start, end: line.length });
+    if (cells.length > 0 && cells[0].text.trim() === "") {
+      cells.shift();
+    }
+    if (cells.length > 0 && cells[cells.length - 1].text.trim() === "") {
+      cells.pop();
+    }
+    return cells;
+  }
+
+  private sourceIndexToEditorPosition(source: string, index: number): EditorPosition {
+    const before = source.slice(0, index).split(/\n/);
+    return {
+      line: before.length - 1,
+      ch: before[before.length - 1]?.length ?? 0
+    };
+  }
+
+  private getMarkdownTableRange(editor: Editor, from: EditorPosition, to: EditorPosition): { from: EditorPosition; to: EditorPosition } | null {
+    const startLine = Math.max(0, Math.min(from.line, to.line));
+    const endLine = Math.min(editor.lineCount() - 1, Math.max(from.line, to.line));
+    for (let line = startLine; line <= endLine; line += 1) {
+      const range = this.getMarkdownTableRangeAtLine(editor, line);
+      if (range) {
+        return range;
+      }
+    }
+    return this.getMarkdownTableRangeAtLine(editor, startLine);
+  }
+
+  private getMarkdownTableRangeAtLine(editor: Editor, line: number): { from: EditorPosition; to: EditorPosition } | null {
+    if (!this.isMarkdownTableLikeLine(editor.getLine(line))) {
+      return null;
+    }
+    let start = line;
+    while (start > 0 && this.isMarkdownTableLikeLine(editor.getLine(start - 1))) {
+      start -= 1;
+    }
+    let end = line;
+    while (end + 1 < editor.lineCount() && this.isMarkdownTableLikeLine(editor.getLine(end + 1))) {
+      end += 1;
+    }
+    let hasSeparator = false;
+    for (let index = start; index <= end; index += 1) {
+      if (this.isMarkdownTableSeparatorLine(editor.getLine(index))) {
+        hasSeparator = true;
+        break;
+      }
+    }
+    if (!hasSeparator) {
+      return null;
+    }
+    return {
+      from: { line: start, ch: 0 },
+      to: { line: end, ch: editor.getLine(end).length }
+    };
+  }
+
+  private getMarkdownTableRangeInLines(lines: string[], line: number): { from: EditorPosition; to: EditorPosition } | null {
+    if (!this.isMarkdownTableLikeLine(lines[line] ?? "")) {
+      return null;
+    }
+    let start = line;
+    while (start > 0 && this.isMarkdownTableLikeLine(lines[start - 1])) {
+      start -= 1;
+    }
+    let end = line;
+    while (end + 1 < lines.length && this.isMarkdownTableLikeLine(lines[end + 1])) {
+      end += 1;
+    }
+    const hasSeparator = lines.slice(start, end + 1).some((entry) => this.isMarkdownTableSeparatorLine(entry));
+    if (!hasSeparator) {
+      return null;
+    }
+    return {
+      from: { line: start, ch: 0 },
+      to: { line: end, ch: lines[end]?.length ?? 0 }
+    };
+  }
+
+  private isMarkdownTableLikeLine(line: string) {
+    return line.includes("|") && line.trim().length > 0;
+  }
+
+  private isMarkdownTableSeparatorLine(line: string) {
+    return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(line);
+  }
+
+  private validateTableEditRange(original: string, replacement: string, range: TableEditRange) {
+    const originalRows = this.parseMarkdownTableCells(original);
+    const replacementRows = this.parseMarkdownTableCells(replacement);
+    if (this.validateFixedShapeTableEditRange(originalRows, replacementRows, range)) {
+      return true;
+    }
+    if (this.isFullTableRowRange(range, originalRows) && this.validateTableRowBlockEditRange(originalRows, replacementRows, range)) {
+      return true;
+    }
+    if (this.isFullTableColumnRange(range, originalRows) && this.validateTableColumnBlockEditRange(originalRows, replacementRows, range)) {
+      return true;
+    }
+    console.warn("[codex-ai-agent] Inline table edit validation failed", {
+      range,
+      originalRows,
+      replacementRows
+    });
+    return false;
+  }
+
+  private validateFixedShapeTableEditRange(originalRows: string[][], replacementRows: string[][], range: TableEditRange) {
+    if (originalRows.length !== replacementRows.length) {
+      return false;
+    }
+    for (let row = 0; row < originalRows.length; row += 1) {
+      if (originalRows[row].length !== replacementRows[row]?.length) {
+        return false;
+      }
+      for (let col = 0; col < originalRows[row].length; col += 1) {
+        const inEditRange = row >= range.startRow && row <= range.endRow && col >= range.startCol && col <= range.endCol;
+        if (!inEditRange && originalRows[row][col] !== replacementRows[row][col]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  private validateTableRowBlockEditRange(originalRows: string[][], replacementRows: string[][], range: TableEditRange) {
+    const columnCount = this.getTableColumnCount(originalRows);
+    if (!replacementRows.every((row) => row.length === columnCount)) {
+      return false;
+    }
+
+    const prefixCount = Math.max(0, Math.min(range.startRow, originalRows.length));
+    const suffixStart = Math.max(prefixCount, Math.min(range.endRow + 1, originalRows.length));
+    const suffixCount = originalRows.length - suffixStart;
+    if (replacementRows.length < prefixCount + suffixCount) {
+      return false;
+    }
+
+    for (let row = 0; row < prefixCount; row += 1) {
+      if (!this.tableCellsMatch(originalRows[row], replacementRows[row] ?? [])) {
+        return false;
+      }
+    }
+
+    const replacementSuffixStart = replacementRows.length - suffixCount;
+    for (let offset = 0; offset < suffixCount; offset += 1) {
+      if (!this.tableCellsMatch(originalRows[suffixStart + offset], replacementRows[replacementSuffixStart + offset] ?? [])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private validateTableColumnBlockEditRange(originalRows: string[][], replacementRows: string[][], range: TableEditRange) {
+    if (originalRows.length !== replacementRows.length) {
+      return false;
+    }
+
+    const columnCount = this.getTableColumnCount(originalRows);
+    const prefixCount = Math.max(0, Math.min(range.startCol, columnCount));
+    const suffixStart = Math.max(prefixCount, Math.min(range.endCol + 1, columnCount));
+    const suffixCount = columnCount - suffixStart;
+
+    for (let row = 0; row < originalRows.length; row += 1) {
+      const originalRow = originalRows[row];
+      const replacementRow = replacementRows[row] ?? [];
+      if (replacementRow.length < prefixCount + suffixCount) {
+        return false;
+      }
+      for (let col = 0; col < prefixCount; col += 1) {
+        if (originalRow[col] !== replacementRow[col]) {
+          return false;
+        }
+      }
+      const replacementSuffixStart = replacementRow.length - suffixCount;
+      for (let offset = 0; offset < suffixCount; offset += 1) {
+        if (originalRow[suffixStart + offset] !== replacementRow[replacementSuffixStart + offset]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  private isFullTableRowRange(range: TableEditRange, rows: string[][]) {
+    const columnCount = this.getTableColumnCount(rows);
+    return columnCount > 0 && range.startCol <= 0 && range.endCol >= columnCount - 1;
+  }
+
+  private isFullTableColumnRange(range: TableEditRange, rows: string[][]) {
+    return rows.length > 0 && range.startRow <= 0 && range.endRow >= rows.length - 1;
+  }
+
+  private getTableColumnCount(rows: string[][]) {
+    return Math.max(...rows.map((row) => row.length), 0);
+  }
+
+  private parseMarkdownTableCells(markdown: string): string[][] {
+    return markdown
+      .split(/\r?\n/)
+      .filter((line) => this.isMarkdownTableLikeLine(line))
+      .filter((line) => !this.isMarkdownTableSeparatorLine(line))
+      .map((line) => this.splitMarkdownTableRow(line));
+  }
+
+  private getEditorContextBefore(editor: Editor, from: EditorPosition) {
+    const startLine = Math.max(0, from.line - 4);
+    return editor.getRange({ line: startLine, ch: 0 }, from);
+  }
+
+  private getEditorContextAfter(editor: Editor, to: EditorPosition) {
+    const endLine = Math.min(editor.lineCount() - 1, to.line + 4);
+    return editor.getRange(to, { line: endLine, ch: editor.getLine(endLine).length });
+  }
+
+  private normalizeEditorPosition(position: EditorPosition): EditorPosition {
+    return { line: position.line, ch: position.ch };
+  }
+
+  private compareEditorPositions(a: EditorPosition, b: EditorPosition) {
+    if (a.line !== b.line) {
+      return a.line - b.line;
+    }
+    return a.ch - b.ch;
+  }
+
+  private editorPositionToOffset(editorView: EditorView, position: EditorPosition) {
+    const lineNumber = Math.min(Math.max(position.line + 1, 1), editorView.state.doc.lines);
+    const line = editorView.state.doc.line(lineNumber);
+    return Math.min(line.to, line.from + Math.max(position.ch, 0));
+  }
+
+  private getCodeMirrorEditorView(editor: Editor): EditorView | null {
+    return (editor as any).cm instanceof EditorView ? (editor as any).cm : null;
+  }
+
+  private getVaultBasePath() {
+    try {
+      return (this.app.vault.adapter as any).getBasePath?.() ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  private getParentPath(filePath: string) {
+    const trimmed = filePath.trim();
+    const index = trimmed.lastIndexOf("/");
+    return index > 0 ? trimmed.slice(0, index) : "";
+  }
+
+  private toCodexModel(model: ModelChoice) {
+    const mapping: Record<ModelChoice, string> = {
+      "GPT-5.5": "gpt-5.5",
+      "GPT-5.4": "gpt-5.4",
+      "GPT-5.4 Mini": "gpt-5.4-mini",
+      "GPT-5.3 Codex": "gpt-5.3-codex"
+    };
+    return mapping[model];
+  }
+
+  private toCodexReasoningEffort(level: ReasoningLevel) {
+    const mapping: Record<ReasoningLevel, string | null> = {
+      "Auto": null,
+      "Low": "low",
+      "Medium": "medium",
+      "High": "high",
+      "Extra High": "xhigh"
+    };
+    return mapping[level];
+  }
+
+  private getActiveMarkdownScrollTop(view: MarkdownView) {
+    const scroller = view.contentEl.querySelector<HTMLElement>(".cm-scroller, .markdown-preview-view");
+    return scroller?.scrollTop ?? 0;
+  }
+
+  private getMarkdownViewSourceFlag(view: MarkdownView) {
+    const state = typeof view.getState === "function" ? view.getState() : {};
+    return typeof state.source === "boolean" ? state.source : view.getMode() === "source";
+  }
+
+  private setActiveMarkdownScrollTop(view: MarkdownView, scrollTop: number) {
+    const scroller = view.contentEl.querySelector<HTMLElement>(".cm-scroller, .markdown-preview-view");
+    if (scroller) {
+      scroller.scrollTop = scrollTop;
+    }
   }
 }
 
@@ -2513,7 +4860,11 @@ class CodexAgentSettingTab extends PluginSettingTab {
         .addOption("en", "English")
         .setValue(settings.language)
         .onChange(async (value) => {
-          await this.update({ language: value as AppLanguage });
+          const language = value as AppLanguage;
+          await this.update({
+            language,
+            inlineEditQuickCommands: this.owner.localizeInlineEditQuickCommands(this.owner.getSettings().inlineEditQuickCommands, language)
+          });
           this.display();
         }));
 
@@ -2559,6 +4910,57 @@ class CodexAgentSettingTab extends PluginSettingTab {
       .setName(this.tr("粘贴图片行为", "Pasted image behavior"))
       .setDesc(this.tr("将粘贴的图片转换为图片 chip。", "Convert pasted images into image chips. This can later expand to direct image context."))
       .addDropdown((dropdown) => dropdown.addOption("chip", "Convert to image chip").setValue(settings.pastedImageBehavior));
+
+    this.renderInlineEditQuickCommands(containerEl, settings);
+  }
+
+  private renderInlineEditQuickCommands(containerEl: HTMLElement, settings: AgentPluginSettings) {
+    containerEl.createEl("h3", { text: this.tr("Inline Edit 快捷指令", "Inline Edit quick commands") });
+    containerEl.createEl("p", {
+      cls: "codex-agent-settings-help",
+      text: this.tr("这些指令会出现在“用 Codex 修改选中内容”的快捷指令下拉中。", "These commands appear in the quick command menu for Edit selection with Codex.")
+    });
+    settings.inlineEditQuickCommands.forEach((command, index) => {
+      const displayCommand = this.owner.localizeInlineEditQuickCommand(command, settings.language);
+      new Setting(containerEl)
+        .setName(displayCommand.name || this.tr("未命名指令", "Untitled command"))
+        .addText((text) => text
+          .setPlaceholder(this.tr("名称，例如：润色", "Name, e.g. Polish"))
+          .setValue(displayCommand.name)
+          .onChange(async (value) => {
+            const commands = [...this.owner.getSettings().inlineEditQuickCommands];
+            commands[index] = { ...commands[index], name: value };
+            await this.update({ inlineEditQuickCommands: commands });
+          }))
+        .addTextArea((text) => text
+          .setPlaceholder(this.tr("Prompt，例如：润色选中内容...", "Prompt, e.g. Polish the selected text..."))
+          .setValue(displayCommand.prompt)
+          .onChange(async (value) => {
+            const commands = [...this.owner.getSettings().inlineEditQuickCommands];
+            commands[index] = { ...commands[index], prompt: value };
+            await this.update({ inlineEditQuickCommands: commands });
+          }))
+        .addButton((button) => button
+          .setButtonText(this.tr("删除", "Delete"))
+          .onClick(async () => {
+            const commands = this.owner.getSettings().inlineEditQuickCommands.filter((_, entryIndex) => entryIndex !== index);
+            await this.update({ inlineEditQuickCommands: commands });
+            this.display();
+          }));
+    });
+    new Setting(containerEl)
+      .setName(this.tr("新增快捷指令", "Add quick command"))
+      .addButton((button) => button
+        .setButtonText(this.tr("新增", "Add"))
+        .setCta()
+        .onClick(async () => {
+          const commands = [
+            ...this.owner.getSettings().inlineEditQuickCommands,
+            { id: `custom-${Date.now()}`, name: this.tr("新指令", "New command"), prompt: "" }
+          ];
+          await this.update({ inlineEditQuickCommands: commands });
+          this.display();
+        }));
   }
 
   private renderSafety(containerEl: HTMLElement, settings: AgentPluginSettings) {
@@ -2964,6 +5366,35 @@ class CodexAgentView extends ItemView {
 
   private tr(zh: string, en: string) {
     return this.owner.tr(zh, en);
+  }
+
+  private localizeInlineEditStatusTitle(title: string) {
+    const normalized = title.trim().toLowerCase();
+    if (normalized === "thinking") {
+      return this.tr("思考中", "Thinking");
+    }
+    if (normalized === "generating") {
+      return this.tr("生成中", "Generating");
+    }
+    if (normalized === "failed") {
+      return this.tr("失败", "Failed");
+    }
+    if (normalized === "completed") {
+      return this.tr("已完成", "Completed");
+    }
+    if (normalized === "command failed") {
+      return this.tr("命令失败", "Command failed");
+    }
+    if (normalized === "command complete") {
+      return this.tr("命令完成", "Command complete");
+    }
+    if (normalized === "running command") {
+      return this.tr("运行命令", "Running command");
+    }
+    if (normalized === "diff updated") {
+      return this.tr("Diff 已更新", "Diff updated");
+    }
+    return title;
   }
 
   applyDisplaySettings() {
@@ -5713,7 +8144,7 @@ class CodexAgentView extends ItemView {
       kind: "file",
       path: file.path
     });
-    new Notice(`Added file to Agent: ${file.name}`);
+    new Notice(`${this.tr("已添加文件到Codex对话", "Added file to Codex conversation")}: ${file.name}`);
   }
 
   addFolderContext(folder: TFolder) {
@@ -5724,7 +8155,7 @@ class CodexAgentView extends ItemView {
       kind: "folder",
       path: folder.path
     });
-    new Notice(`Added folder to Agent: ${folder.path}`);
+    new Notice(`${this.tr("已添加文件夹到Codex对话", "Added folder to Codex conversation")}: ${folder.path}`);
   }
 
   addSelectionContext(selection: string, file: TFile | null) {
@@ -5742,6 +8173,341 @@ class CodexAgentView extends ItemView {
       text: selection
     });
     new Notice("Added selected text to Agent");
+  }
+
+  beginInlineEditConversation(mode: InlineEditConversationMode, payload: {
+    request: string;
+    filePath?: string;
+    originalText: string;
+    isTableMode: boolean;
+  }): InlineEditConversationRun {
+    this.saveComposerDraftToActiveSession();
+    if (mode === "new") {
+      const session = this.createSession(this.tr("Inline Edit", "Inline Edit"));
+      this.sessions = [...this.sessions, session];
+      this.activeSessionId = session.id;
+      this.clearComposer();
+    }
+    const session = this.getActiveSession();
+    if (!this.hasStartedConversation(session)) {
+      session.title = this.makeSessionTitle(payload.request || "Inline Edit");
+    }
+    const contextChip: ContextChip = {
+      id: this.makeContextChipId("selection", payload.filePath ?? "inline-edit"),
+      kind: "selection",
+      label: payload.isTableMode ? this.tr("Markdown 表格源码", "Markdown table source") : this.tr("选中内容", "Selected content"),
+      detail: this.tr(
+        `${payload.originalText.length} 个字符${payload.filePath ? `，来自 ${payload.filePath}` : ""}`,
+        `${payload.originalText.length} characters${payload.filePath ? ` from ${payload.filePath}` : ""}`
+      ),
+      path: payload.filePath,
+      text: payload.originalText
+    };
+    const statusIndex = session.timeline.length + 1;
+    const responseIndex = session.timeline.length + 2;
+    session.timeline = [
+      ...session.timeline,
+      {
+        title: "You",
+        body: payload.request,
+        tone: "user",
+        contextChips: [contextChip],
+        messageParts: [
+          { type: "text", text: payload.request },
+          { type: "chip", chip: contextChip }
+        ]
+      },
+      {
+        title: this.tr("Inline Edit", "Inline Edit"),
+        body: this.tr("思考中", "Thinking"),
+        tone: "status"
+      },
+      {
+        title: "",
+        body: "",
+        tone: "response",
+        streaming: true
+      }
+    ];
+    session.statusItemIndex = statusIndex;
+    session.runStartedAt = Date.now();
+    session.updatedAt = Date.now();
+    this.persistSessions();
+    this.renderSessionTabs();
+    this.renderTimelineItems();
+    this.renderTokenUsage();
+    this.updateRunButtonDisabledState();
+    window.requestAnimationFrame(() => this.scrollTimelineToBottom("smooth"));
+
+    const updateTarget = (target: AgentSession, renderTabs = false) => {
+      target.updatedAt = Date.now();
+      this.persistSessions();
+      if (this.activeSessionId === target.id) {
+        this.renderTimelineItems();
+        this.renderTokenUsage();
+        if (renderTabs) {
+          this.renderSessionTabs();
+        }
+      }
+    };
+    const findTarget = () => this.sessions.find((entry) => entry.id === session.id);
+    const updateStatus = (target: AgentSession, title: string, body?: string) => {
+      if (!target.timeline[statusIndex]) {
+        return;
+      }
+      target.timeline[statusIndex] = {
+        ...target.timeline[statusIndex],
+        title: title || this.tr("Inline Edit", "Inline Edit"),
+        body: body || title || this.tr("思考中", "Thinking"),
+        tone: "status"
+      };
+    };
+    const updateResponseBody = (target: AgentSession, body: string, streaming: boolean) => {
+      if (!target.timeline[responseIndex]) {
+        return;
+      }
+      target.timeline[responseIndex] = {
+        ...target.timeline[responseIndex],
+        body: this.sanitizeInlineEditConversationBody(body, !streaming),
+        streaming
+      };
+    };
+    const upsertTimelineItem = (target: AgentSession, predicate: (item: TimelineItem) => boolean, item: TimelineItem) => {
+      const existingIndex = target.timeline.findIndex(predicate);
+      if (existingIndex >= 0) {
+        target.timeline[existingIndex] = item;
+      } else {
+        target.timeline = [...target.timeline, item];
+      }
+    };
+
+    return {
+      threadId: session.codexThreadId,
+      onEvent: (event: AgentEvent) => {
+        const target = findTarget();
+        if (!target) {
+          return;
+        }
+        if (event.type === "thread") {
+          target.codexThreadId = event.threadId;
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "status") {
+          updateStatus(target, this.localizeInlineEditStatusTitle(event.title || "Thinking"), event.detail);
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "message_delta") {
+          if (!target.timeline[responseIndex]) {
+            return;
+          }
+          updateResponseBody(target, `${target.timeline[responseIndex].body}${event.delta}`, true);
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "message") {
+          if (!target.timeline[responseIndex]) {
+            return;
+          }
+          updateResponseBody(target, target.timeline[responseIndex].body || event.markdown, true);
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "tool") {
+          const body = [event.detail, `Status: ${event.status}`].filter(Boolean).join("\n");
+          upsertTimelineItem(
+            target,
+            (item) => item.toolItemId === event.itemId,
+            {
+              title: event.title,
+              body,
+              tone: "tool",
+              toolItemId: event.itemId
+            }
+          );
+          updateStatus(target, event.title, body);
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "command") {
+          const itemId = event.itemId ?? `inline-command:${statusIndex}`;
+          const title = event.status === "failed"
+            ? this.tr("命令失败", "Command failed")
+            : event.status === "done"
+              ? this.tr("命令完成", "Command complete")
+              : this.tr("运行命令", "Running command");
+          const body = [event.command, event.cwd ? `cwd: ${event.cwd}` : "", `Status: ${event.status}`].filter(Boolean).join("\n");
+          upsertTimelineItem(
+            target,
+            (item) => item.toolItemId === itemId,
+            {
+              title,
+              body,
+              tone: "tool",
+              toolItemId: itemId
+            }
+          );
+          updateStatus(target, title, body);
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "plan") {
+          const completed = event.items.filter((item) => item.status === "completed").length;
+          upsertTimelineItem(
+            target,
+            (item) => item.planId === event.itemId,
+            {
+              title: event.title || this.tr("计划", "Plan"),
+              body: event.items.map((item) => `${item.status}:${item.text}`).join("\n") || this.tr(`${event.items.length} 个计划项`, `${event.items.length} plan items`),
+              tone: "tool",
+              planId: event.itemId,
+              planItems: event.items,
+              planSummary: true
+            }
+          );
+          updateStatus(target, this.tr(`${completed}/${event.items.length} 个计划项已完成`, `${completed}/${event.items.length} plan items complete`), event.title);
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "token_usage") {
+          target.tokenUsageTotal = event.totalTokens;
+          target.tokenUsageInput = typeof event.inputTokens === "number" ? event.inputTokens : target.tokenUsageInput;
+          target.tokenUsageLimit = typeof event.modelContextWindow === "number" ? event.modelContextWindow : null;
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "diff") {
+          upsertTimelineItem(
+            target,
+            (item) => item.diffId === `inline-edit-diff:${statusIndex}`,
+            {
+              title: this.tr("Diff 已更新", "Diff updated"),
+              body: event.diff,
+              tone: "tool",
+              diffId: `inline-edit-diff:${statusIndex}`,
+              diffText: event.diff
+            }
+          );
+          updateStatus(target, this.tr("Diff 已更新", "Diff updated"), event.diff);
+          updateTarget(target);
+          return;
+        }
+        if (event.type === "error") {
+          target.timeline = [
+            ...target.timeline,
+            { title: event.title, body: event.message, tone: "command" }
+          ];
+          target.statusItemIndex = null;
+          updateTarget(target, true);
+        }
+      },
+      onThread: (threadId: string) => {
+        const target = this.sessions.find((entry) => entry.id === session.id);
+        if (!target) {
+          return;
+        }
+        target.codexThreadId = threadId;
+        target.updatedAt = Date.now();
+        this.persistSessions();
+      },
+      onStatus: (title: string) => {
+        const target = this.sessions.find((entry) => entry.id === session.id);
+        if (!target?.timeline[statusIndex]) {
+          return;
+        }
+        target.timeline[statusIndex] = {
+          ...target.timeline[statusIndex],
+          body: title || this.tr("思考中", "Thinking")
+        };
+        target.updatedAt = Date.now();
+        this.persistSessions();
+        if (this.activeSessionId === session.id) {
+          this.renderTimelineItems();
+        }
+      },
+      onDelta: (delta: string) => {
+        const target = this.sessions.find((entry) => entry.id === session.id);
+        if (!target?.timeline[responseIndex]) {
+          return;
+        }
+        target.timeline[responseIndex] = {
+          ...target.timeline[responseIndex],
+          body: `${target.timeline[responseIndex].body}${delta}`,
+          streaming: true
+        };
+        target.updatedAt = Date.now();
+        this.persistSessions();
+        if (this.activeSessionId === session.id) {
+          this.renderTimelineItems();
+        }
+      },
+      onMessage: (markdown: string) => {
+        const target = this.sessions.find((entry) => entry.id === session.id);
+        if (!target?.timeline[responseIndex]) {
+          return;
+        }
+        target.timeline[responseIndex] = {
+          ...target.timeline[responseIndex],
+          body: target.timeline[responseIndex].body || markdown,
+          streaming: true
+        };
+        target.updatedAt = Date.now();
+        this.persistSessions();
+        if (this.activeSessionId === session.id) {
+          this.renderTimelineItems();
+        }
+      },
+      onComplete: () => {
+        const target = this.sessions.find((entry) => entry.id === session.id);
+        if (!target) {
+          return;
+        }
+        if (target.timeline[responseIndex]) {
+          updateResponseBody(target, target.timeline[responseIndex].body, false);
+        }
+        target.statusItemIndex = null;
+        target.updatedAt = Date.now();
+        this.persistSessions();
+        if (this.activeSessionId === session.id) {
+          this.renderTimelineItems();
+          this.renderSessionTabs();
+        }
+      },
+      onError: (title: string, message: string) => {
+        const target = this.sessions.find((entry) => entry.id === session.id);
+        if (!target) {
+          return;
+        }
+        target.timeline = [
+          ...target.timeline,
+          { title, body: message, tone: "command" }
+        ];
+        target.statusItemIndex = null;
+        target.updatedAt = Date.now();
+        this.persistSessions();
+        if (this.activeSessionId === session.id) {
+          this.renderTimelineItems();
+          this.renderSessionTabs();
+        }
+      }
+    };
+  }
+
+  private sanitizeInlineEditConversationBody(body: string, complete: boolean) {
+    const tagged = body.match(/<replacement>\s*([\s\S]*?)\s*<\/replacement>/i);
+    if (tagged) {
+      return tagged[1].replace(/^\n+|\n+$/g, "");
+    }
+    if (complete) {
+      return body
+        .replace(/^\s*<replacement>\s*/i, "")
+        .replace(/\s*<\/replacement>\s*$/i, "")
+        .replace(/^\n+|\n+$/g, "");
+    }
+    return body
+      .replace(/^\s*<replacement>\s*/i, "")
+      .replace(/\s*<\/replacement>\s*$/i, "");
   }
 
   private addImageContext(file: File) {
