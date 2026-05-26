@@ -227,6 +227,7 @@ interface InlineDiffReviewSnapshot {
   acceptedFiles: string[];
   acceptedHunks: string[];
   acceptedLines: string[];
+  language: AppLanguage;
 }
 
 interface InlineDiffAction {
@@ -332,7 +333,7 @@ let activeInlineEditController: {
   handleInlineEditReject(id: string): void;
   handleInlineEditClose(id: string): void;
   handleInlineEditConversationMode(id: string, mode: InlineEditConversationMode): void;
-  handleInlineEditQuickCommand(id: string, commandId: string): void;
+  handleInlineEditQuickCommand(id: string, commandId: string, mode: InlineEditConversationMode): void;
 } | null = null;
 
 const setInlineDiffReviewEffect = StateEffect.define<InlineDiffReviewSnapshot | null>();
@@ -610,7 +611,7 @@ class InlineEditWidget extends WidgetType {
         menu.addItem((item) => item
           .setTitle(command.name)
           .setIcon("sparkles")
-          .onClick(() => activeInlineEditController?.handleInlineEditQuickCommand(this.snapshot.id, command.id)));
+          .onClick(() => activeInlineEditController?.handleInlineEditQuickCommand(this.snapshot.id, command.id, this.snapshot.conversationMode)));
       });
     }
     menu.showAtMouseEvent(event);
@@ -682,7 +683,8 @@ class InlineDiffHunkWidget extends WidgetType {
     private filePath: string,
     private hunk: DiffHunkView,
     private index: number,
-    private accepted: boolean
+    private accepted: boolean,
+    private language: AppLanguage
   ) {
     super();
   }
@@ -691,7 +693,8 @@ class InlineDiffHunkWidget extends WidgetType {
     return other instanceof InlineDiffHunkWidget
       && other.filePath === this.filePath
       && other.hunk.id === this.hunk.id
-      && other.accepted === this.accepted;
+      && other.accepted === this.accepted
+      && other.language === this.language;
   }
 
   toDOM() {
@@ -701,8 +704,8 @@ class InlineDiffHunkWidget extends WidgetType {
     label.setAttr("title", this.hunk.header);
     row.createSpan({ cls: "codex-agent-cm-diff-count is-add", text: `+${this.hunk.added}` });
     row.createSpan({ cls: "codex-agent-cm-diff-count is-remove", text: `-${this.hunk.removed}` });
-    row.appendChild(this.createAction("✓", "接受此 hunk", "accept-hunk"));
-    row.appendChild(this.createAction("×", "拒绝此 hunk", "reject-hunk", true));
+    row.appendChild(this.createAction("✓", inlineEditTr(this.language, "接受此 hunk", "Accept hunk"), "accept-hunk"));
+    row.appendChild(this.createAction("×", inlineEditTr(this.language, "拒绝此 hunk", "Reject hunk"), "reject-hunk", true));
     return row;
   }
 
@@ -731,7 +734,8 @@ class InlineDiffLineControlWidget extends WidgetType {
   constructor(
     private action: InlineDiffAction,
     private marker: string,
-    private accepted: boolean
+    private accepted: boolean,
+    private language: AppLanguage
   ) {
     super();
   }
@@ -742,15 +746,16 @@ class InlineDiffLineControlWidget extends WidgetType {
       && other.action.filePath === this.action.filePath
       && other.action.hunkId === this.action.hunkId
       && other.action.lineKey === this.action.lineKey
-      && other.accepted === this.accepted;
+      && other.accepted === this.accepted
+      && other.language === this.language;
   }
 
   toDOM() {
     const wrap = document.createElement("span");
     wrap.className = `codex-agent-cm-diff-inline-controls ${this.accepted ? "is-accepted" : ""}`;
     wrap.createSpan({ cls: "codex-agent-cm-diff-marker", text: this.marker });
-    wrap.appendChild(this.createButton("✓", "接受这一行", "accept-line"));
-    wrap.appendChild(this.createButton("×", "拒绝这一行", "reject-line", true));
+    wrap.appendChild(this.createButton("✓", inlineEditTr(this.language, "接受这一行", "Accept line"), "accept-line"));
+    wrap.appendChild(this.createButton("×", inlineEditTr(this.language, "拒绝这一行", "Reject line"), "reject-line", true));
     return wrap;
   }
 
@@ -778,7 +783,8 @@ class InlineDiffRemovedLineWidget extends WidgetType {
   constructor(
     private action: InlineDiffAction,
     private text: string,
-    private oldLine?: number
+    private oldLine: number | undefined,
+    private language: AppLanguage
   ) {
     super();
   }
@@ -789,7 +795,8 @@ class InlineDiffRemovedLineWidget extends WidgetType {
       && other.action.hunkId === this.action.hunkId
       && other.action.lineKey === this.action.lineKey
       && other.text === this.text
-      && other.oldLine === this.oldLine;
+      && other.oldLine === this.oldLine
+      && other.language === this.language;
   }
 
   toDOM() {
@@ -799,8 +806,8 @@ class InlineDiffRemovedLineWidget extends WidgetType {
     row.createSpan({ cls: "codex-agent-cm-diff-removed-number", text: this.oldLine ? String(this.oldLine) : "" });
     row.createSpan({ cls: "codex-agent-cm-diff-removed-code", text: this.text || " " });
     const actions = row.createSpan("codex-agent-cm-diff-removed-actions");
-    actions.appendChild(this.createButton("✓", "接受这一行"));
-    actions.appendChild(this.createButton("×", "拒绝这一行", true));
+    actions.appendChild(this.createButton("✓", inlineEditTr(this.language, "接受这一行", "Accept line")));
+    actions.appendChild(this.createButton("×", inlineEditTr(this.language, "拒绝这一行", "Reject line"), true));
     return row;
   }
 
@@ -842,7 +849,7 @@ function buildInlineDiffDecorations(state: any, snapshot: InlineDiffReviewSnapsh
     }
     const hunkPos = findInlineHunkPosition(state, hunk);
     ranges.push(Decoration.widget({
-      widget: new InlineDiffHunkWidget(snapshot.file.path, hunk, index, hunkAccepted),
+      widget: new InlineDiffHunkWidget(snapshot.file.path, hunk, index, hunkAccepted, snapshot.language),
       block: true,
       side: -1
     }).range(hunkPos));
@@ -863,7 +870,7 @@ function buildInlineDiffDecorations(state: any, snapshot: InlineDiffReviewSnapsh
             filePath: snapshot.file.path,
             hunkId: hunk.id,
             lineKey
-          }, "+", lineAccepted),
+          }, "+", lineAccepted, snapshot.language),
           side: -1
         }).range(docLine.from));
       } else if (line.type === "remove") {
@@ -874,7 +881,7 @@ function buildInlineDiffDecorations(state: any, snapshot: InlineDiffReviewSnapsh
             filePath: snapshot.file.path,
             hunkId: hunk.id,
             lineKey
-          }, line.text, line.oldLine),
+          }, line.text, line.oldLine, snapshot.language),
           block: true,
           side: -1
         }).range(pos));
@@ -3627,7 +3634,7 @@ export default class CodexForObsidianPlugin extends Plugin {
     editor.focus();
   }
 
-  async handleInlineEditSubmit(id: string, request: string) {
+  async handleInlineEditSubmit(id: string, request: string, conversationModeOverride?: InlineEditConversationMode) {
     const state = this.inlineEditState;
     if (!state || state.id !== id || state.status === "running") {
       return;
@@ -3637,13 +3644,14 @@ export default class CodexForObsidianPlugin extends Plugin {
       new Notice(this.tr("请输入修改要求。", "Enter an edit request."));
       return;
     }
+    const conversationMode = conversationModeOverride ?? state.conversationMode;
     const currentText = state.editor.getRange(state.from, state.to);
     if (currentText !== state.originalText) {
       this.updateInlineEditState({ status: "error", statusTitle: this.tr("选区内容已变化，请重新选择。", "Selection changed. Select it again.") });
       return;
     }
     const isQuestionOnly = this.isInlineEditQuestionRequest(trimmed);
-    this.updateInlineEditState({ request: trimmed, status: "running", statusTitle: this.tr("思考中", "Thinking"), resultText: "" });
+    this.updateInlineEditState({ request: trimmed, conversationMode, status: "running", statusTitle: this.tr("思考中", "Thinking"), resultText: "" });
     const runId = ++this.inlineEditRunId;
     let buffer = "";
     const settings = this.getSettings();
@@ -3659,7 +3667,7 @@ export default class CodexForObsidianPlugin extends Plugin {
       ? this.composeInlineEditQuestionPrompt({ ...state, request: trimmed })
       : this.composeInlineEditPrompt({ ...state, request: trimmed });
     const agentView = await this.activateView();
-    const conversationRun = agentView?.beginInlineEditConversation(state.conversationMode, {
+    const conversationRun = agentView?.beginInlineEditConversation(conversationMode, {
       request: trimmed,
       filePath: state.file?.path,
       originalText: state.originalText,
@@ -3794,7 +3802,7 @@ export default class CodexForObsidianPlugin extends Plugin {
     this.updateInlineEditState({ conversationMode: mode });
   }
 
-  handleInlineEditQuickCommand(id: string, commandId: string) {
+  handleInlineEditQuickCommand(id: string, commandId: string, mode: InlineEditConversationMode) {
     const state = this.inlineEditState;
     if (!state || state.id !== id || state.status === "running") {
       return;
@@ -3803,7 +3811,7 @@ export default class CodexForObsidianPlugin extends Plugin {
     if (!command || !command.prompt.trim()) {
       return;
     }
-    this.handleInlineEditSubmit(id, command.prompt);
+    this.handleInlineEditSubmit(id, command.prompt, mode);
   }
 
   private getRunnableInlineEditQuickCommands() {
@@ -5050,7 +5058,8 @@ class CodexAgentSettingTab extends PluginSettingTab {
             this.tr("这会删除 .obsidian/.codexaiagent 下的会话、设置和 diff 审查状态。当前 Agent 面板会关闭，插件设置会恢复默认值。", "This deletes conversations, settings, and diff review state under .obsidian/.codexaiagent. The current Agent panel will close and settings will reset to defaults."),
             this.tr("确认清理", "Clear data"),
             true,
-            () => void this.owner.clearUserData()
+            () => void this.owner.clearUserData(),
+            this.tr("取消", "Cancel")
           ).open();
         }));
   }
@@ -5230,7 +5239,8 @@ class CodexConfirmModal extends Modal {
     private message: string,
     private confirmLabel: string,
     private danger: boolean,
-    private onConfirm: () => void
+    private onConfirm: () => void,
+    private cancelLabel = "Cancel"
   ) {
     super(app);
   }
@@ -5242,7 +5252,7 @@ class CodexConfirmModal extends Modal {
     contentEl.createEl("h3", { text: this.title });
     contentEl.createEl("p", { text: this.message });
     const actions = contentEl.createDiv("codex-agent-approval-modal-actions");
-    const cancel = actions.createEl("button", { text: "取消" });
+    const cancel = actions.createEl("button", { text: this.cancelLabel });
     const confirm = actions.createEl("button", { cls: this.danger ? "mod-warning" : "mod-cta", text: this.confirmLabel });
     cancel.addEventListener("click", () => this.close());
     confirm.addEventListener("click", () => {
@@ -6762,7 +6772,7 @@ class CodexAgentView extends ItemView {
       new Notice("Change review is disabled in Codex Agent settings.");
       return;
     }
-    const stats = this.getActiveRunState()?.currentDiffStats;
+    const stats = this.getActiveReviewDiffStats();
     if (!stats || stats.files.length === 0) {
       new Notice("No Codex file changes to review.");
       return;
@@ -6931,7 +6941,7 @@ class CodexAgentView extends ItemView {
           });
           const reject = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: this.tr("拒绝文件", "Reject file"), attr: { type: "button" } });
           reject.disabled = status.key !== "pending";
-          reject.setAttr("title", status.key === "pending" ? "拒绝整个文件改动" : "已有接受记录，不能再整体拒绝");
+          reject.setAttr("title", status.key === "pending" ? this.tr("拒绝整个文件改动", "Reject all changes in this file") : this.tr("已有接受记录，不能再整体拒绝", "This file already has accepted review items, so it cannot be rejected as a whole"));
           reject.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -6985,7 +6995,10 @@ class CodexAgentView extends ItemView {
           "file-text",
           this.tr("总结当前变更", "Summarize changes"),
           this.tr("只读分析，不暂存、不提交", "Read-only; no staging or commit"),
-          "请总结当前未提交变更，按文件分组说明修改目的、关键影响和需要我重点审查的风险；不要修改文件。",
+          this.tr(
+            "请总结当前未提交变更，按文件分组说明修改目的、关键影响和需要我重点审查的风险；不要修改文件。",
+            "Summarize the current uncommitted changes by file. Explain the purpose, key impact, and risks I should review closely. Do not modify files."
+          ),
           this.tr("已填入总结当前变更的请求。", "Inserted the change-summary request.")
         );
         this.renderDiffReviewFilters(section, files, renderPanelBody);
@@ -7008,7 +7021,10 @@ class CodexAgentView extends ItemView {
           this.tr("暂存变更", "Stage changes"),
           this.tr("暂存是 Git 的提交候选区，和上方审查标记相互独立。请先查看 Git 状态，再明确选择要暂存的文件。", "Staging is Git's commit candidate area and is independent from review markers. Check Git status first, then choose what to stage."),
           this.tr("选择暂存", "Choose staging"),
-          "请查看当前 Git 状态，列出工作区改动和暂存区内容；不要自动暂存，先让我选择要暂存的文件。",
+          this.tr(
+            "请查看当前 Git 状态，列出工作区改动和暂存区内容；不要自动暂存，先让我选择要暂存的文件。",
+            "Check the current Git status and list workspace changes plus staged content. Do not stage anything automatically; let me choose which files to stage first."
+          ),
           this.tr("已新建 Agent 并发送 Git 暂存请求。", "Created a new Agent and sent the Git staging request."),
           true
         );
@@ -7022,7 +7038,10 @@ class CodexAgentView extends ItemView {
           this.tr("提交版本", "Commit version"),
           this.tr("提交会把暂存区保存成一次 Git 历史版本。提交前应先确认工作区、暂存区和提交说明，避免把未审查内容混进去。", "Commit saves the staging area as Git history. Confirm workspace, staging area, and commit message first."),
           this.tr("提交变更", "Commit changes"),
-          "请检查当前 Git 状态，确认工作区和暂存区没有明显问题后，暂存相关文件并创建一次语义清晰的 Git 提交。提交前先说明将包含哪些文件。",
+          this.tr(
+            "请检查当前 Git 状态，确认工作区和暂存区没有明显问题后，暂存相关文件并创建一次语义清晰的 Git 提交。提交前先说明将包含哪些文件。",
+            "Check the current Git status. After confirming the workspace and staging area look correct, stage the relevant files and create a clear semantic Git commit. Before committing, first explain which files will be included."
+          ),
           this.tr("已新建 Agent 并发送 Git 提交请求。", "Created a new Agent and sent the Git commit request."),
           true
         );
@@ -7035,7 +7054,10 @@ class CodexAgentView extends ItemView {
         this.tr("版本记录", "Version history"),
         this.tr("版本记录只查看已经提交过的历史。这里适合对比、回看或讨论回退方案，不会改动当前文件。", "Version history only reads committed history. Use it for comparison, review, or rollback discussion."),
         this.tr("查看记录", "View history"),
-        "请查看最近 Git 提交记录，按时间列出版本说明，并提示是否存在适合回退或对比的版本；不要修改文件。",
+        this.tr(
+          "请查看最近 Git 提交记录，按时间列出版本说明，并提示是否存在适合回退或对比的版本；不要修改文件。",
+          "Review the recent Git commit history. List version notes by time and mention whether any version is useful for rollback or comparison. Do not modify files."
+        ),
         this.tr("已填入查看版本记录的请求。", "Inserted the history request.")
       );
       this.renderGitFooter(footerHost, this.activeGitReviewSection, enableGitSections);
@@ -7119,7 +7141,8 @@ class CodexAgentView extends ItemView {
         this.persistGitDiffReviewState();
         refresh();
         new Notice(this.tr(`已接受 ${files.length} 个文件。`, `Accepted ${files.length} files.`));
-      }
+      },
+      this.tr("取消", "Cancel")
     ).open();
   }
 
@@ -7127,10 +7150,14 @@ class CodexAgentView extends ItemView {
     new CodexConfirmModal(
       this.app,
       this.tr("拒绝所有文件？", "Reject all files?"),
-      `这会实际撤回当前 ${files.length} 个文件的工作区修改。此操作会反向应用 patch，请确认这些改动都不要保留。`,
+      this.tr(
+        `这会实际撤回当前 ${files.length} 个文件的工作区修改。此操作会反向应用 patch，请确认这些改动都不要保留。`,
+        `This will revert workspace changes in ${files.length} files by applying reverse patches. Confirm that none of these changes should be kept.`
+      ),
       this.tr("确认拒绝", "Reject all"),
       true,
-      () => void this.rejectAllDiffFiles(files)
+      () => void this.rejectAllDiffFiles(files),
+      this.tr("取消", "Cancel")
     ).open();
   }
 
@@ -7279,7 +7306,7 @@ class CodexAgentView extends ItemView {
       const counts = head.createSpan("codex-agent-diff-file-counts");
       this.renderDiffCounts(counts, hunk.added, hunk.removed, false);
       const actions = head.createSpan("codex-agent-diff-hunk-actions");
-      const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? "Accepted" : "Accept hunk", attr: { type: "button" } });
+      const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? this.tr("已接受", "Accepted") : this.tr("接受 hunk", "Accept hunk"), attr: { type: "button" } });
       accept.disabled = accepted;
       accept.addEventListener("click", (event) => {
         event.preventDefault();
@@ -7293,9 +7320,9 @@ class CodexAgentView extends ItemView {
         this.persistGitDiffReviewState();
         onChange();
       });
-      const reject = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "Reject hunk", attr: { type: "button" } });
+      const reject = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: this.tr("拒绝 hunk", "Reject hunk"), attr: { type: "button" } });
       reject.disabled = accepted;
-      reject.setAttr("title", accepted ? "已接受的 hunk 不能再拒绝" : "拒绝此 hunk");
+      reject.setAttr("title", accepted ? this.tr("已接受的 hunk 不能再拒绝", "Accepted hunks cannot be rejected") : this.tr("拒绝此 hunk", "Reject this hunk"));
       reject.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -7424,23 +7451,23 @@ class CodexAgentView extends ItemView {
     const fileHasAcceptedReview = this.hasAcceptedDiffReviewInFile(file);
     const acceptAll = actions.createEl("button", { cls: "codex-agent-diff-action", text: fileHasAcceptedReview ? this.tr("已全部接受", "All accepted") : this.tr("全部接受", "Accept all"), attr: { type: "button" } });
     acceptAll.disabled = fileHasAcceptedReview;
-    acceptAll.setAttr("title", fileHasAcceptedReview ? "已接受的改动不会再显示为待处理 diff" : "接受全部改动");
+    acceptAll.setAttr("title", fileHasAcceptedReview ? this.tr("已接受的改动不会再显示为待处理 diff", "Accepted changes no longer appear as pending diffs") : this.tr("接受全部改动", "Accept all changes"));
     acceptAll.addEventListener("click", () => {
-        if (acceptAll.disabled) {
-          return;
-        }
-        this.gitDiffAcceptedFiles.add(file.path);
-        this.gitDiffRejectedFiles.delete(file.path);
-        file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id)));
-        file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line))));
-        this.persistGitDiffReviewState();
-        new Notice(`Accepted changes in ${file.path}.`);
-        void this.reloadActiveGitDiffPanel();
-        this.renderGitDiffEditorReviewBar(file);
-      });
+      if (acceptAll.disabled) {
+        return;
+      }
+      this.gitDiffAcceptedFiles.add(file.path);
+      this.gitDiffRejectedFiles.delete(file.path);
+      file.hunks.forEach((hunk) => this.gitDiffAcceptedHunks.add(this.getDiffHunkKey(file.path, hunk.id)));
+      file.hunks.forEach((hunk) => hunk.lines.forEach((line) => this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line))));
+      this.persistGitDiffReviewState();
+      new Notice(`${this.tr("已接受文件改动", "Accepted changes in")}: ${file.path}`);
+      void this.reloadActiveGitDiffPanel();
+      this.renderGitDiffEditorReviewBar(file);
+    });
     const rejectAll = actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: this.tr("全部拒绝", "Reject all"), attr: { type: "button" } });
     rejectAll.disabled = fileHasAcceptedReview;
-    rejectAll.setAttr("title", fileHasAcceptedReview ? "已有接受记录，不能再全部拒绝" : "拒绝全部改动");
+    rejectAll.setAttr("title", fileHasAcceptedReview ? this.tr("已有接受记录，不能再全部拒绝", "This file already has accepted review items, so it cannot be rejected as a whole") : this.tr("拒绝全部改动", "Reject all changes"));
     rejectAll.addEventListener("click", () => {
       if (rejectAll.disabled) {
         return;
@@ -7543,7 +7570,8 @@ class CodexAgentView extends ItemView {
         file,
         acceptedFiles: [...this.gitDiffAcceptedFiles],
         acceptedHunks: [...this.gitDiffAcceptedHunks],
-        acceptedLines: [...this.gitDiffAcceptedLines]
+        acceptedLines: [...this.gitDiffAcceptedLines],
+        language: this.owner.getSettings().language
       })
     });
   }
@@ -7586,9 +7614,9 @@ class CodexAgentView extends ItemView {
       });
       row.createSpan({ cls: "codex-agent-editor-review-line-code", text: line.text || " " });
       const actions = row.createSpan("codex-agent-editor-review-line-actions");
-      actions.createEl("button", { cls: "codex-agent-diff-action", text: "定位", attr: { type: "button" } })
+      actions.createEl("button", { cls: "codex-agent-diff-action", text: this.tr("定位", "Locate"), attr: { type: "button" } })
         .addEventListener("click", () => this.focusDiffLineInEditor(file, hunk, line));
-      const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? "已接受" : "接受", attr: { type: "button" } });
+      const accept = actions.createEl("button", { cls: "codex-agent-diff-action", text: accepted ? this.tr("已接受", "Accepted") : this.tr("接受", "Accept"), attr: { type: "button" } });
       accept.disabled = accepted;
       accept.addEventListener("click", () => {
         this.gitDiffAcceptedLines.add(this.getDiffLineKey(file.path, hunk.id, line));
@@ -7604,7 +7632,7 @@ class CodexAgentView extends ItemView {
         this.renderGitDiffEditorReviewBar(file);
         this.focusNextPendingDiffHunk(file, hunk);
       });
-      actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: "拒绝", attr: { type: "button" } })
+      actions.createEl("button", { cls: "codex-agent-diff-action is-danger", text: this.tr("拒绝", "Reject"), attr: { type: "button" } })
         .addEventListener("click", () => void this.rejectDiffLineInEditor(file, hunk, line));
     });
   }
@@ -7973,7 +8001,7 @@ class CodexAgentView extends ItemView {
       this.liveDiffEl.removeClass("is-visible");
       return;
     }
-    const stats = this.getActiveRunState()?.currentDiffStats;
+    const stats = this.getActiveReviewDiffStats();
     if (!stats || stats.files.length === 0) {
       this.liveDiffEl.removeClass("is-visible");
       return;
@@ -7985,6 +8013,34 @@ class CodexAgentView extends ItemView {
     setIcon(this.liveDiffEl.createSpan("codex-agent-live-diff-icon"), "pencil");
     this.liveDiffEl.createSpan({ cls: "codex-agent-live-diff-label", text: label });
     this.renderDiffCounts(this.liveDiffEl, stats.added, stats.removed, true);
+  }
+
+  private getActiveReviewDiffStats() {
+    const currentStats = this.getActiveRunState()?.currentDiffStats;
+    const stats = currentStats?.files?.length ? currentStats : this.getLatestSessionDiffStats();
+    if (!stats?.files?.length) {
+      return null;
+    }
+    const hasReviewableFiles = stats.files.some((file: DiffFileView) => {
+      const status = this.getDiffFileReviewStatus(file).key;
+      return status === "pending" || status === "partial";
+    });
+    return hasReviewableFiles ? stats : null;
+  }
+
+  private getLatestSessionDiffStats() {
+    const session = this.getActiveSession();
+    for (let index = session.timeline.length - 1; index >= 0; index -= 1) {
+      const item = session.timeline[index];
+      if (!item.diffText) {
+        continue;
+      }
+      const stats = this.parseDiffStats(item.diffText);
+      if (stats.files.length > 0) {
+        return { ...stats, diffText: item.diffText };
+      }
+    }
+    return null;
   }
 
   private openModeMenu(event: MouseEvent) {
