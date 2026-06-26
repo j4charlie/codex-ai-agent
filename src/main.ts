@@ -61,6 +61,39 @@ const INLINE_EDIT_DEFAULT_COMMANDS = {
     enPrompt: "Summarize the selected content into concise points while preserving the key information."
   }
 };
+
+function getExecutableParentPath(filePath: string) {
+  const trimmed = filePath.trim();
+  const index = trimmed.lastIndexOf("/");
+  if (index <= 0) {
+    return "";
+  }
+  return trimmed.slice(0, index);
+}
+
+function buildExecutableExtraPath(...filePaths: Array<string | undefined>) {
+  const dirs: string[] = [];
+  const seen = new Set<string>();
+  filePaths.forEach((filePath) => {
+    const dir = getExecutableParentPath(filePath ?? "");
+    if (!dir || seen.has(dir)) {
+      return;
+    }
+    seen.add(dir);
+    dirs.push(dir);
+  });
+  return dirs.join(path.delimiter);
+}
+
+function buildChildProcessEnv(extraPath?: string) {
+  if (!extraPath?.trim()) {
+    return process.env;
+  }
+  return {
+    ...process.env,
+    PATH: `${extraPath.trim()}${path.delimiter}${process.env.PATH ?? ""}`
+  };
+}
 const DEFAULT_SETTINGS: AgentPluginSettings = {
   codexBin: DEFAULT_CODEX_BIN,
   nodeBin: "",
@@ -1288,13 +1321,7 @@ class ExecJsonAdapter implements CodexAdapter {
   }
 
   private buildChildEnv(extraPath?: string) {
-    if (!extraPath?.trim()) {
-      return process.env;
-    }
-    return {
-      ...process.env,
-      PATH: `${extraPath.trim()}:${process.env.PATH ?? ""}`
-    };
+    return buildChildProcessEnv(extraPath);
   }
 
 }
@@ -1387,13 +1414,7 @@ class AppServerAdapter implements CodexAdapter {
   }
 
   private buildChildEnv(extraPath?: string) {
-    if (!extraPath?.trim()) {
-      return process.env;
-    }
-    return {
-      ...process.env,
-      PATH: `${extraPath.trim()}:${process.env.PATH ?? ""}`
-    };
+    return buildChildProcessEnv(extraPath);
   }
 
   private startThreadOrTurn(
@@ -3661,7 +3682,7 @@ export default class CodexForObsidianPlugin extends Plugin {
       return;
     }
     const codexBin = process.env.CODEX_BIN || settings.codexBin || DEFAULT_CODEX_BIN;
-    const extraPath = this.getParentPath(settings.nodeBin);
+    const extraPath = buildExecutableExtraPath(settings.nodeBin, codexBin);
     const adapter = settings.adapterMode === "exec-json" ? new ExecJsonAdapter() : new AppServerAdapter();
     const prompt = isQuestionOnly
       ? this.composeInlineEditQuestionPrompt({ ...state, request: trimmed })
@@ -4697,12 +4718,6 @@ export default class CodexForObsidianPlugin extends Plugin {
     }
   }
 
-  private getParentPath(filePath: string) {
-    const trimmed = filePath.trim();
-    const index = trimmed.lastIndexOf("/");
-    return index > 0 ? trimmed.slice(0, index) : "";
-  }
-
   private toCodexModel(model: ModelChoice) {
     const mapping: Record<ModelChoice, string> = {
       "GPT-5.5": "gpt-5.5",
@@ -4828,11 +4843,15 @@ class CodexAgentSettingTab extends PluginSettingTab {
         }))
       .addButton((button) => button
         .setButtonText("Test")
-        .onClick(() => this.testCommand(this.owner.getSettings().codexBin || DEFAULT_CODEX_BIN, ["--version"], "Codex CLI")));
+        .onClick(() => {
+          const settings = this.owner.getSettings();
+          const codexBin = settings.codexBin || DEFAULT_CODEX_BIN;
+          this.testCommand(codexBin, ["--version"], "Codex CLI", this.getRuntimeExtraPath(codexBin));
+        }));
 
     new Setting(containerEl)
       .setName(this.tr("Node.js 路径", "Node.js path"))
-      .setDesc(this.tr("通常留空。仅当 Codex 依赖指定 Node，或 Obsidian 图形环境找不到 node 时设置。", "Usually leave blank. Only set this if an npm-installed Codex depends on a specific Node binary, or Obsidian cannot find node in the GUI environment."))
+      .setDesc(this.tr("通常留空。仅当 Codex 依赖指定 Node、或 Obsidian 图形环境找不到 node 时设置。例如使用 n 管理 Node 版本时，codex 脚本需要 node 在 PATH 中。", "Usually leave blank. Only set this when Codex needs a specific Node, or Obsidian cannot find node (e.g., when using n to manage Node versions, the codex script requires node to be in PATH)."))
       .addText((text) => text
         .setPlaceholder("/usr/local/bin/node")
         .setValue(settings.nodeBin)
@@ -4845,7 +4864,7 @@ class CodexAgentSettingTab extends PluginSettingTab {
             new Notice("Node.js path is empty.");
             return;
           }
-          this.testCommand(nodeBin, ["--version"], "Node.js");
+          this.testCommand(nodeBin, ["--version"], "Node.js", this.getRuntimeExtraPath());
         }));
 
     new Setting(containerEl)
@@ -5107,24 +5126,35 @@ class CodexAgentSettingTab extends PluginSettingTab {
 
   private async checkCodex(command: string) {
     this.renderSetupStatus("checking", "Checking Codex...", "Verifying that Obsidian can run the Codex CLI.");
-    const result = await this.runCommand(command, ["--version"]);
+    const extraPath = this.getRuntimeExtraPath(command);
+    const result = await this.runCommand(command, ["--version"], extraPath);
     if (result.ok) {
       this.renderSetupStatus("ready", "Codex is ready.", result.detail || command);
       return true;
     }
-    this.renderSetupStatus(
-      "error",
-      "Codex was not found.",
-      "Obsidian could not run Codex. Try common locations, or paste the full Codex executable path in Advanced settings."
-    );
+    if (result.exitCode === 127) {
+      this.renderSetupStatus(
+        "error",
+        "Codex needs Node.js in PATH.",
+        `Codex exited with 127 (command not found). The Node.js binary may not be in PATH. Try setting the "Node.js path" in Advanced settings.\n\nDetail: ${result.detail}`
+      );
+    } else {
+      this.renderSetupStatus(
+        "error",
+        "Codex was not found.",
+        `Obsidian could not run Codex. Try common locations, or paste the full Codex executable path in Advanced settings.\n\nDetail: ${result.detail}`
+      );
+    }
     return false;
   }
 
   private async tryCommonCodexLocations() {
     this.renderSetupStatus("checking", "Looking for Codex...", "Trying common install locations.");
+    const settings = this.owner.getSettings();
     for (const candidate of COMMON_CODEX_BINS) {
       const expanded = this.expandHomePath(candidate);
-      const result = await this.runCommand(expanded, ["--version"]);
+      const extraPath = buildExecutableExtraPath(settings.nodeBin, expanded);
+      const result = await this.runCommand(expanded, ["--version"], extraPath);
       if (result.ok) {
         await this.update({ codexBin: expanded });
         this.renderSetupStatus("ready", "Codex is ready.", `${result.detail || expanded} · Using ${expanded}`);
@@ -5146,21 +5176,25 @@ class CodexAgentSettingTab extends PluginSettingTab {
     return home ? path.join(home, filePath.slice(2)) : filePath;
   }
 
-  private runCommand(command: string, args: string[]): Promise<{ ok: boolean; detail: string }> {
+  private runCommand(command: string, args: string[], extraPath?: string): Promise<{ ok: boolean; detail: string; exitCode?: number }> {
     return new Promise((resolve) => {
       if (!command.trim()) {
         resolve({ ok: false, detail: "Path is empty." });
         return;
       }
-      const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const opts: any = { stdio: ["ignore", "pipe", "pipe"] };
+      if (extraPath?.trim()) {
+        opts.env = buildChildProcessEnv(extraPath);
+      }
+      const child = spawn(command, args, opts);
       let output = "";
       let settled = false;
-      const finish = (ok: boolean, detail: string) => {
+      const finish = (ok: boolean, detail: string, exitCode?: number) => {
         if (settled) {
           return;
         }
         settled = true;
-        resolve({ ok, detail });
+        resolve({ ok, detail, exitCode });
       };
       child.stdout.on("data", (chunk: any) => {
         output += chunk.toString();
@@ -5173,17 +5207,21 @@ class CodexAgentSettingTab extends PluginSettingTab {
       });
       child.on("close", (code: number | null) => {
         const detail = output.trim().split(/\r?\n/)[0] ?? "";
-        finish(code === 0, detail);
+        finish(code === 0, detail, code ?? undefined);
       });
     });
   }
 
-  private testCommand(command: string, args: string[], label: string) {
+  private testCommand(command: string, args: string[], label: string, extraPath?: string) {
     if (!command.trim()) {
       new Notice(`${label} path is empty.`);
       return;
     }
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const opts: any = { stdio: ["ignore", "pipe", "pipe"] };
+    if (extraPath?.trim()) {
+      opts.env = buildChildProcessEnv(extraPath);
+    }
+    const child = spawn(command, args, opts);
     let output = "";
     child.stdout.on("data", (chunk: any) => {
       output += chunk.toString();
@@ -5198,6 +5236,11 @@ class CodexAgentSettingTab extends PluginSettingTab {
       const detail = output.trim().split(/\r?\n/)[0] ?? "";
       new Notice(code === 0 ? `${label} OK: ${detail}` : `${label} exited with ${code}: ${detail}`);
     });
+  }
+
+  private getRuntimeExtraPath(codexBin?: string): string {
+    const settings = this.owner.getSettings();
+    return buildExecutableExtraPath(settings.nodeBin, codexBin ?? settings.codexBin);
   }
 }
 
@@ -9527,7 +9570,7 @@ class CodexAgentView extends ItemView {
 
     const settings = this.owner.getSettings();
     const codexBin = process.env.CODEX_BIN || settings.codexBin || DEFAULT_CODEX_BIN;
-    const extraPath = this.buildRuntimeExtraPath(settings);
+    const extraPath = this.buildRuntimeExtraPath(settings, codexBin);
     const adapter = this.getCodexAdapter();
     const promptText = this.composeCodexPrompt(payload);
     const handle = adapter.start(
@@ -9565,17 +9608,8 @@ class CodexAgentView extends ItemView {
     this.clearComposer();
   }
 
-  private buildRuntimeExtraPath(settings: AgentPluginSettings) {
-    return this.getParentPath(settings.nodeBin);
-  }
-
-  private getParentPath(filePath: string) {
-    const trimmed = filePath.trim();
-    const index = trimmed.lastIndexOf("/");
-    if (index <= 0) {
-      return "";
-    }
-    return trimmed.slice(0, index);
+  private buildRuntimeExtraPath(settings: AgentPluginSettings, codexBin?: string) {
+    return buildExecutableExtraPath(settings.nodeBin, codexBin ?? settings.codexBin);
   }
 
   private saveComposerDraftToActiveSession() {
