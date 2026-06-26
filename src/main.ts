@@ -6520,11 +6520,11 @@ class CodexAgentView extends ItemView {
     if (!this.runButton) {
       return;
     }
-    this.runButton.empty();
     this.runButton.toggleClass("is-running", isRunning);
     this.runButton.disabled = isRunning ? false : !this.hasPromptContent();
     this.runButton.setAttr("aria-label", isRunning ? "Stop" : "Submit");
     this.runButton.setAttr("title", isRunning ? "Stop" : "Send");
+    this.runButton.replaceChildren();
     setIcon(this.runButton, isRunning ? "square" : "send-horizontal");
   }
 
@@ -10772,8 +10772,7 @@ class CodexAgentView extends ItemView {
       return;
     }
 
-    this.runningProcesses.delete(sessionId);
-    this.stopElapsedTimer(sessionId);
+    this.finishRunUi(sessionId);
     void this.renderGitChanges();
     this.withRunContext(sessionId, runState, () => {
       this.markActiveResponseComplete();
@@ -10784,8 +10783,6 @@ class CodexAgentView extends ItemView {
         this.updateTranscriptStatus(this.getProcessedStatusTitle(), "");
       }
     });
-    this.updateRunButtonDisabledState();
-    this.renderSessionTabs();
     this.persistSessions();
   }
 
@@ -10807,17 +10804,21 @@ class CodexAgentView extends ItemView {
     if (!runState) {
       return;
     }
-    this.runningProcesses.delete(sessionId);
-    this.stopElapsedTimer(sessionId);
+    this.finishRunUi(sessionId);
     runState.currentDiffStats = null;
     this.withRunContext(sessionId, runState, () => {
       this.markActiveResponseComplete();
       this.renderLiveDiff();
       this.finishRunStatus("Stopped", "Codex process was stopped by the user.");
     });
+    this.persistSessions();
+  }
+
+  private finishRunUi(sessionId: string) {
+    this.runningProcesses.delete(sessionId);
+    this.stopElapsedTimer(sessionId);
     this.updateRunButtonDisabledState();
     this.renderSessionTabs();
-    this.persistSessions();
   }
 
   private cancelRun(sessionId: string) {
